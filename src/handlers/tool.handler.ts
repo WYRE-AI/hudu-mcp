@@ -30,7 +30,8 @@ export class HuduToolHandler {
       // Connection
       ['hudu_test_connection', async () => {
         const ok = await s.testConnection();
-        return { result: { success: ok }, message: ok ? 'Successfully connected to Hudu API' : 'Connection failed' };
+        if (!ok) throw new Error('Connection failed: check HUDU_BASE_URL and HUDU_API_KEY');
+        return { result: { success: true }, message: 'Successfully connected to Hudu API' };
       }],
 
       // Companies
