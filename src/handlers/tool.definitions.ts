@@ -1,6 +1,13 @@
 export interface McpTool {
   name: string;
   description: string;
+  annotations?: {
+    title: string;
+    readOnlyHint: boolean;
+    destructiveHint: boolean;
+    idempotentHint: boolean;
+    openWorldHint: boolean;
+  };
   inputSchema: {
     type: string;
     properties: Record<string, any>;
@@ -98,7 +105,17 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'hudu_delete_company',
-    description: 'Delete a company in Hudu',
+    description:
+      '⚠ DESTRUCTIVE — IRREVERSIBLE. Permanently deletes a company and all of its ' +
+      'associated assets, articles, passwords, and other data. This action cannot be undone. ' +
+      'Confirm with the user before invoking.',
+    annotations: {
+      title: 'Delete company (irreversible)',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'number', description: 'Company ID' } },
@@ -107,7 +124,17 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'hudu_archive_company',
-    description: 'Archive a company in Hudu',
+    description:
+      '⚠ HIGH-IMPACT. Archives a company, removing it from active use and hiding ' +
+      'associated assets, passwords, and articles from normal operations. Reversible by unarchiving. ' +
+      'Confirm with the user before invoking.',
+    annotations: {
+      title: 'Archive company (reversible)',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'number', description: 'Company ID' } },
@@ -116,7 +143,17 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'hudu_unarchive_company',
-    description: 'Unarchive a company in Hudu',
+    description:
+      '⚠ HIGH-IMPACT. Restores an archived company back to active use, making ' +
+      'it and all associated assets, passwords, and articles visible again in normal operations. ' +
+      'Confirm with the user before invoking.',
+    annotations: {
+      title: 'Unarchive company (reversible)',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'number', description: 'Company ID' } },
@@ -190,7 +227,17 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'hudu_delete_asset',
-    description: 'Delete an asset in Hudu',
+    description:
+      '⚠ DESTRUCTIVE — IRREVERSIBLE. Permanently deletes an asset and all of its ' +
+      'associated data, passwords, and configuration information. This action cannot be undone. ' +
+      'Confirm with the user before invoking.',
+    annotations: {
+      title: 'Delete asset (irreversible)',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'number', description: 'Asset ID' } },
@@ -199,7 +246,17 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'hudu_archive_asset',
-    description: 'Archive an asset in Hudu',
+    description:
+      '⚠ HIGH-IMPACT. Archives an asset, removing it from active use and hiding ' +
+      'it from normal asset listings and operations. Reversible by unarchiving. ' +
+      'Confirm with the user before invoking.',
+    annotations: {
+      title: 'Archive asset (reversible)',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'number', description: 'Asset ID' } },
@@ -339,7 +396,17 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'hudu_delete_asset_password',
-    description: 'Delete an asset password in Hudu',
+    description:
+      '⚠ DESTRUCTIVE — IRREVERSIBLE. Permanently deletes an asset password and all ' +
+      'associated authentication information. This action cannot be undone. ' +
+      'Confirm with the user before invoking.',
+    annotations: {
+      title: 'Delete asset password (irreversible)',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'number', description: 'Asset password ID' } },
@@ -407,7 +474,17 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'hudu_delete_article',
-    description: 'Delete a knowledge base article in Hudu',
+    description:
+      '⚠ DESTRUCTIVE — IRREVERSIBLE. Permanently deletes a knowledge base article and all ' +
+      'its content, attachments, and version history. This action cannot be undone. ' +
+      'Confirm with the user before invoking.',
+    annotations: {
+      title: 'Delete article (irreversible)',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'number', description: 'Article ID' } },
@@ -416,7 +493,17 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'hudu_archive_article',
-    description: 'Archive a knowledge base article in Hudu',
+    description:
+      '⚠ HIGH-IMPACT. Archives a knowledge base article, removing it from active use ' +
+      'and hiding it from normal article listings and search results. Reversible by unarchiving. ' +
+      'Confirm with the user before invoking.',
+    annotations: {
+      title: 'Archive article (reversible)',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'number', description: 'Article ID' } },
@@ -487,7 +574,17 @@ export const TOOL_DEFINITIONS: McpTool[] = [
   },
   {
     name: 'hudu_delete_website',
-    description: 'Delete a website in Hudu',
+    description:
+      '⚠ DESTRUCTIVE — IRREVERSIBLE. Permanently deletes a website and all ' +
+      'its monitoring history, SSL certificates, and DNS records data. This action cannot be undone. ' +
+      'Confirm with the user before invoking.',
+    annotations: {
+      title: 'Delete website (irreversible)',
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'number', description: 'Website ID' } },
