@@ -31,7 +31,7 @@
   "author": "Aaron Sachs",
   "license": "Apache-2.0",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@wyre-technology/node-hudu": "latest",
     "winston": "^3.11.0",
     "zod": "^3.22.4"
