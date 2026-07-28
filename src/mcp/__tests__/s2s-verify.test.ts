@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import { verifyS2sHeader } from '../s2s-verify.js';
 
@@ -15,26 +15,33 @@ describe('verifyS2sHeader', () => {
   const MASTER = 'test-master-secret-do-not-use-in-prod';
   const ownSubkey = deriveRecipientSubkey(MASTER, 'hudu');
   const siblingSubkey = deriveRecipientSubkey(MASTER, 'rocketcyber');
+  // Fixed, frozen clock so skew-window boundary tests are deterministic —
+  // without this, a real clock tick between minting a header and verifying
+  // it can shave a second off the intended skew, flaking the boundary cases.
+  const NOW = 1_800_000_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW * 1000);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   it("accepts a header minted with this vendor's own derived subkey", () => {
-    const now = Math.floor(Date.now() / 1000);
-    expect(verifyS2sHeader(mintHeader(ownSubkey, now), ownSubkey)).toBe(true);
+    expect(verifyS2sHeader(mintHeader(ownSubkey, NOW), ownSubkey)).toBe(true);
   });
   it('REJECTS a header minted for a different vendor\'s derived subkey (recipient-binding proof)', () => {
-    const now = Math.floor(Date.now() / 1000);
-    expect(verifyS2sHeader(mintHeader(siblingSubkey, now), ownSubkey)).toBe(false);
+    expect(verifyS2sHeader(mintHeader(siblingSubkey, NOW), ownSubkey)).toBe(false);
   });
   it('rejects a stale timestamp outside the skew window', () => {
-    const now = Math.floor(Date.now() / 1000);
-    expect(verifyS2sHeader(mintHeader(ownSubkey, now - 301), ownSubkey)).toBe(false);
+    expect(verifyS2sHeader(mintHeader(ownSubkey, NOW - 301), ownSubkey)).toBe(false);
   });
   it('rejects a future timestamp outside the skew window', () => {
-    const now = Math.floor(Date.now() / 1000);
-    expect(verifyS2sHeader(mintHeader(ownSubkey, now + 301), ownSubkey)).toBe(false);
+    expect(verifyS2sHeader(mintHeader(ownSubkey, NOW + 301), ownSubkey)).toBe(false);
   });
   it('accepts a timestamp at the edge of the skew window', () => {
-    const now = Math.floor(Date.now() / 1000);
-    expect(verifyS2sHeader(mintHeader(ownSubkey, now - 300), ownSubkey)).toBe(true);
+    expect(verifyS2sHeader(mintHeader(ownSubkey, NOW - 300), ownSubkey)).toBe(true);
   });
   it('rejects a malformed header value', () => {
     expect(verifyS2sHeader('not-a-valid-header', ownSubkey)).toBe(false);
@@ -43,12 +50,10 @@ describe('verifyS2sHeader', () => {
     expect(verifyS2sHeader(undefined, ownSubkey)).toBe(false);
   });
   it('rejects when the secret is empty (dark-by-default guarantee)', () => {
-    const now = Math.floor(Date.now() / 1000);
-    expect(verifyS2sHeader(mintHeader(ownSubkey, now), '')).toBe(false);
+    expect(verifyS2sHeader(mintHeader(ownSubkey, NOW), '')).toBe(false);
   });
   it('rejects a tampered signature', () => {
-    const now = Math.floor(Date.now() / 1000);
-    const header = mintHeader(ownSubkey, now);
+    const header = mintHeader(ownSubkey, NOW);
     const tampered = header.slice(0, -1) + (header.endsWith('0') ? '1' : '0');
     expect(verifyS2sHeader(tampered, ownSubkey)).toBe(false);
   });
