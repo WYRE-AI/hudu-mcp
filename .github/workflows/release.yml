@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Thin caller for the canonical reusable release pipeline. The build →
+# semantic-release → Docker → MCP Registry → security chain (tag-based release
+# detection + correct gating) lives in wyre-technology/.github so every *-mcp
+# repo stays in lockstep instead of drifting per-repo. PR-time lint/test gating
+# is ci.yml's concern; this workflow only runs the release path.
+# Caller jobs grant the token scopes the reusable jobs request (a reusable can
+# only reduce, never expand, caller-granted scope).
+jobs:
+  release:
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      packages: write
+      id-token: write
+      security-events: write
+    uses: wyre-technology/.github/.github/workflows/mcp-server-release.yml@d28a612a00a1bd0c36aff09e686ce2d1e10ef552
+    with:
+      server-name: hudu-mcp
+      image-name: ghcr.io/wyre-technology/hudu-mcp
+    secrets: inherit
+
+  deploy:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    permissions:
+      id-token: write
+      contents: read
+    uses: wyre-technology/.github/.github/workflows/mcp-server-deploy.yml@a61021de876d0fd44dac777fa90f963fea25b0c3
+    with:
+      vendor-slug: hudu
+      image-name: ghcr.io/wyre-technology/hudu-mcp
+      digest: ${{ needs.release.outputs.digest }}
+      version: ${{ needs.release.outputs.version }}
+    secrets: inherit
