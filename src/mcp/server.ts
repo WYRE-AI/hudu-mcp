@@ -18,6 +18,7 @@ import { McpServerConfig } from '../types/mcp.js';
 import { EnvironmentConfig, GatewayCredentials, parseCredentialsFromHeaders } from '../utils/config.js';
 import { HuduResourceHandler } from '../handlers/resource.handler.js';
 import { HuduToolHandler } from '../handlers/tool.handler.js';
+import { verifyS2sHeader, S2S_HEADER } from './s2s-verify.js';
 
 export class HuduMcpServer {
   private server: Server;
@@ -192,6 +193,24 @@ export class HuduMcpServer {
 
       // MCP endpoint — stateless: fresh server + transport per request
       if (url.pathname === '/mcp') {
+        // Gateway S2S verification (gateway#377 parity). Runs before any
+        // credential extraction — see src/mcp/s2s-verify.ts. Empty secret
+        // means S2S enforcement isn't provisioned for this vendor yet, so
+        // we don't call verifyS2sHeader at all (dark-by-default).
+        const s2sSecret = process.env.CONDUIT_S2S_SECRET || '';
+        if (s2sSecret) {
+          const s2sHeader = req.headers[S2S_HEADER] as string | undefined;
+          if (!verifyS2sHeader(s2sHeader, s2sSecret)) {
+            this.logger.warn('Rejected request with missing/invalid gateway S2S header');
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              error: 'Unauthorized',
+              message: 'Missing or invalid gateway S2S authentication header',
+            }));
+            return;
+          }
+        }
+
         // Only POST is supported in stateless mode
         if (req.method !== 'POST') {
           res.writeHead(405, { 'Content-Type': 'application/json' });
