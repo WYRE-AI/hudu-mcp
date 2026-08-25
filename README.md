@@ -1,6 +1,6 @@
 # hudu-mcp
 
-[![CI](https://github.com/wyre-technology/hudu-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/wyre-technology/hudu-mcp/actions/workflows/ci.yml)
+[![CI](https://github.com/WYRE-AI/hudu-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/WYRE-AI/hudu-mcp/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](https://nodejs.org/)
 
@@ -35,15 +35,15 @@ MCP (Model Context Protocol) server for [Hudu](https://www.huduapp.com/) IT docu
 >    - **Cloudflare Workers** → set a build variable named **`NODE_AUTH_TOKEN`** to your PAT
 >      (Workers → Settings → Build → Variables and Secrets).
 
-[![Deploy to DO](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/wyre-technology/hudu-mcp/tree/main)
+[![Deploy to DO](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/WYRE-AI/hudu-mcp/tree/main)
 
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wyre-technology/hudu-mcp)
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/WYRE-AI/hudu-mcp)
 
 > [!NOTE]
 > The DigitalOcean target builds the full Docker image and runs the complete MCP
 > server over HTTP — this is the recommended path for operators. This repo does not
 > ship a `wrangler.json`/Workers entrypoint, so for a self-hosted server prefer
-> DigitalOcean or the prebuilt container image (`ghcr.io/wyre-technology/hudu-mcp`).
+> DigitalOcean or the prebuilt container image (`ghcr.io/wyre-ai/hudu-mcp`).
 
 ## Installation
 
@@ -52,7 +52,7 @@ Packages** npm registry, which requires a token even for public packages.
 Authenticate npm once before installing:
 
 ```bash
-git clone https://github.com/wyre-technology/hudu-mcp.git
+git clone https://github.com/WYRE-AI/hudu-mcp.git
 cd hudu-mcp
 
 # Authenticate npm to GitHub Packages (token needs the read:packages scope)
