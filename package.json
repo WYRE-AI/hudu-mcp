@@ -1,5 +1,5 @@
 {
-  "name": "@wyre-technology/hudu-mcp",
+  "name": "@wyre-ai/hudu-mcp",
   "version": "1.1.8",
   "description": "MCP (Model Context Protocol) server for Hudu IT documentation platform",
   "main": "dist/entry.js",
