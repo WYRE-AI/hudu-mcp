@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+### Added
+
+- **Test coverage:** handler-invocation tests for `HuduToolHandler` (all 39
+  registered tools) and `HuduResourceHandler`, plus lifecycle tests for
+  `HuduService` (missing-credential guard, lazy client construction,
+  `updateCredentials`, `testConnection`). Previously, coverage stopped at the
+  MCP transport/tool-surface layer (`tools/list`, a single `tools/call` smoke
+  test) — no test invoked an individual tool handler against a mocked Hudu
+  API client, so per-domain request shaping (e.g. splitting `id` out of an
+  update body, stripping a stray `id` on create) and response mapping were
+  unverified. The underlying `@wyre-technology/node-hudu` client is now
+  mocked at the module boundary so each handler runs for real against it.
+
 ### Changed
 
 - **npm package:** the package is now scoped to `@wyre-technology/hudu-mcp` and is
