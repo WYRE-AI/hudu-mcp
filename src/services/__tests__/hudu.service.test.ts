@@ -69,30 +69,32 @@ describe('HuduService - updateCredentials', () => {
 });
 
 describe('HuduService - testConnection', () => {
-  it('returns true when the underlying probe call succeeds', async () => {
+  it('resolves when the underlying probe call succeeds', async () => {
     mockClient.companies.list.mockResolvedValue([]);
     const logger = new Logger('error');
     const service = new HuduService(
       { name: 'hudu-mcp', version: 'test', hudu: { baseUrl: 'https://hudu.example.test', apiKey: 'key' } },
       logger,
     );
-    await expect(service.testConnection()).resolves.toBe(true);
+    await expect(service.testConnection()).resolves.toBeUndefined();
     expect(mockClient.companies.list).toHaveBeenCalledWith({ page: 1, page_size: 1 });
   });
 
-  it('returns false (never throws) when the probe call rejects', async () => {
-    mockClient.companies.list.mockRejectedValue(new Error('timeout'));
+  it('propagates the underlying error when the probe call rejects, instead of masking it', async () => {
+    mockClient.companies.list.mockRejectedValue(new Error('Authentication failed - invalid API key'));
     const logger = new Logger('error');
     const service = new HuduService(
       { name: 'hudu-mcp', version: 'test', hudu: { baseUrl: 'https://hudu.example.test', apiKey: 'key' } },
       logger,
     );
-    await expect(service.testConnection()).resolves.toBe(false);
+    await expect(service.testConnection()).rejects.toThrow('Authentication failed - invalid API key');
   });
 
-  it('returns false when credentials are missing rather than throwing', async () => {
+  it('throws the missing-credentials error rather than swallowing it', async () => {
     const logger = new Logger('error');
     const service = new HuduService({ name: 'hudu-mcp', version: 'test', hudu: {} }, logger);
-    await expect(service.testConnection()).resolves.toBe(false);
+    await expect(service.testConnection()).rejects.toThrow(
+      'Missing required Hudu credentials: HUDU_BASE_URL and HUDU_API_KEY are required',
+    );
   });
 });

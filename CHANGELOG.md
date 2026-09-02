@@ -22,6 +22,16 @@
 
 ### Fixed
 
+- **`hudu_test_connection` error reporting:** the tool now surfaces the real
+  error from the Hudu API (e.g. `Authentication failed - invalid API key`,
+  a DNS/network failure, or a malformed URL) instead of collapsing every
+  failure into a generic "check HUDU_BASE_URL and HUDU_API_KEY" message.
+  `HuduService.testConnection()` previously caught and discarded the
+  underlying error, returning a bare boolean, which made it impossible to
+  tell an auth failure from a bad base URL or a network problem — reported by
+  a community user unable to determine which of a re-generated Hudu API key
+  or their `*.huducloud.com` base URL (tried with and without the `https://`
+  scheme) was the actual problem.
 - **Deploy buttons:** one-click "Deploy to Cloudflare Workers" and "Deploy to
   DigitalOcean" builds no longer fail with `npm error 401 Unauthorized` from
   `npm.pkg.github.com`. The `.npmrc` now reads a `read:packages` token from

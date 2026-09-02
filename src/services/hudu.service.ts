@@ -254,13 +254,8 @@ export class HuduService {
   }
 
   // Test connection
-  async testConnection(): Promise<boolean> {
-    try {
-      const client = await this.ensureClient();
-      await client.companies.list({ page: 1, page_size: 1 });
-      return true;
-    } catch {
-      return false;
-    }
+  async testConnection(): Promise<void> {
+    const client = await this.ensureClient();
+    await client.companies.list({ page: 1, page_size: 1 });
   }
 }

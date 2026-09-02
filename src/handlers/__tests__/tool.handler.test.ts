@@ -124,12 +124,12 @@ describe('HuduToolHandler - callTool dispatch, per domain', () => {
       expect(parsed).toEqual({ message: 'Successfully connected to Hudu API', data: { success: true } });
     });
 
-    it('hudu_test_connection surfaces a connection failure as a tool error', async () => {
+    it('hudu_test_connection surfaces the real underlying error as a tool error, not a generic message', async () => {
       mockClient.companies.list.mockRejectedValue(new Error('network down'));
       const handler = makeHandler();
       const { result, parsed } = await callAndParse(handler, 'hudu_test_connection', {});
       expect(result.isError).toBe(true);
-      expect(parsed.error).toMatch(/Connection failed/);
+      expect(parsed.error).toBe('network down');
       expect(parsed.tool).toBe('hudu_test_connection');
     });
   });
