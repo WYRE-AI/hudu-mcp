@@ -135,6 +135,25 @@ export function loadEnvironmentConfig(): EnvironmentConfig {
   };
 }
 
+/**
+ * Whether a request/connection should actually be proxied to Hudu's native
+ * OAuth-protected MCP server, versus falling through to the local
+ * HuduService/tool-handler dispatch.
+ *
+ * Requires both `mode === 'oauth'` *and* a configured `baseUrl` (needed to
+ * discover the instance's MCP endpoint). A completely unconfigured server
+ * (no `HUDU_API_KEY` and no `HUDU_BASE_URL`) auto-detects `mode: 'oauth'`
+ * but has no base URL to proxy to — it falls through to the same graceful
+ * degradation `api_key` mode has always had: the server starts, `tools/list`
+ * still returns the local tool surface, and only an actual tool call fails
+ * with a clear "missing credentials" error. Without this guard, that
+ * zero-config case would instead throw at startup — a regression from
+ * today's behavior.
+ */
+export function shouldUseOAuthProxy(hudu: Pick<McpServerConfig['hudu'], 'mode' | 'baseUrl'>): boolean {
+  return hudu.mode === 'oauth' && !!hudu.baseUrl;
+}
+
 export function mergeWithMcpConfig(envConfig: EnvironmentConfig): McpServerConfig {
   return {
     name: envConfig.server.name,

@@ -15,7 +15,7 @@ import {
 import { HuduService } from '../services/hudu.service.js';
 import { Logger } from '../utils/logger.js';
 import { McpServerConfig } from '../types/mcp.js';
-import { EnvironmentConfig, GatewayCredentials, parseCredentialsFromHeaders } from '../utils/config.js';
+import { EnvironmentConfig, GatewayCredentials, parseCredentialsFromHeaders, shouldUseOAuthProxy } from '../utils/config.js';
 import { HuduResourceHandler } from '../handlers/resource.handler.js';
 import { HuduToolHandler } from '../handlers/tool.handler.js';
 import { verifyS2sHeader, S2S_HEADER } from './s2s-verify.js';
@@ -163,11 +163,15 @@ export class HuduMcpServer {
   }
 
   private async startStdioTransport(): Promise<void> {
-    if (this.config.hudu.mode === 'oauth') {
-      if (!this.config.hudu.baseUrl) {
-        throw new Error('HUDU_AUTH_MODE=oauth requires HUDU_BASE_URL to be set.');
-      }
-      await startOAuthStdioProxy(this.config.hudu.baseUrl, this.logger);
+    // Only actually start the OAuth proxy once HUDU_BASE_URL is known — it's
+    // required to discover the Hudu instance's MCP endpoint. A completely
+    // unconfigured server (no HUDU_API_KEY *and* no HUDU_BASE_URL) still
+    // auto-detects oauth mode, but falls through to the same graceful
+    // degradation as api_key mode always had: the server starts, tools/list
+    // still returns the local tool surface, and only an actual tool call
+    // fails with a clear "missing credentials" error.
+    if (shouldUseOAuthProxy(this.config.hudu)) {
+      await startOAuthStdioProxy(this.config.hudu.baseUrl!, this.logger);
       return;
     }
 
@@ -236,18 +240,12 @@ export class HuduMcpServer {
         // OAuth mode: reverse-proxy straight through to the Hudu instance's
         // own native MCP server rather than dispatching to HuduService/tool
         // handlers. Mutually exclusive with gateway mode (validated at
-        // config load time in src/utils/config.ts).
-        if (!isGatewayMode && this.config.hudu.mode === 'oauth') {
-          if (!this.config.hudu.baseUrl) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-              jsonrpc: '2.0',
-              error: { code: -32000, message: 'HUDU_AUTH_MODE=oauth requires HUDU_BASE_URL to be set' },
-              id: null,
-            }));
-            return;
-          }
-          proxyHttpMcpRequest(req, res, this.config.hudu.baseUrl, this.logger).catch((error) => {
+        // config load time in src/utils/config.ts). Only takes effect once
+        // HUDU_BASE_URL is known — an unconfigured server (auto-detected
+        // oauth mode, but no base URL set either) falls through below to the
+        // same graceful degradation api_key mode has always had.
+        if (!isGatewayMode && shouldUseOAuthProxy(this.config.hudu)) {
+          proxyHttpMcpRequest(req, res, this.config.hudu.baseUrl!, this.logger).catch((error) => {
             this.logger.error('OAuth HTTP proxy failed:', error);
             if (!res.headersSent) {
               res.writeHead(502, { 'Content-Type': 'application/json' });

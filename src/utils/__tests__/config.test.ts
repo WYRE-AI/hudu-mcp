@@ -5,7 +5,7 @@
  * newer oauth mode (default for a fresh install with no API key).
  */
 import { describe, it, expect } from 'vitest';
-import { computeHuduAuthMode, loadEnvironmentConfig } from '../config.js';
+import { computeHuduAuthMode, loadEnvironmentConfig, shouldUseOAuthProxy } from '../config.js';
 
 function env(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
   return overrides as NodeJS.ProcessEnv;
@@ -73,5 +73,27 @@ describe('loadEnvironmentConfig — Hudu auth mode wiring', () => {
     expect(() => withEnv({ AUTH_MODE: 'gateway', HUDU_AUTH_MODE: 'oauth' }, loadEnvironmentConfig)).toThrow(
       /incompatible with AUTH_MODE=gateway/,
     );
+  });
+});
+
+describe('shouldUseOAuthProxy', () => {
+  it('is true only when mode is oauth AND a baseUrl is configured', () => {
+    expect(shouldUseOAuthProxy({ mode: 'oauth', baseUrl: 'https://docs.example.com' })).toBe(true);
+  });
+
+  it('is false when mode is oauth but no baseUrl is set — the zero-config / CI-canary case', () => {
+    // Regression guard: with no HUDU_API_KEY and no HUDU_BASE_URL at all,
+    // computeHuduAuthMode still auto-detects "oauth", but there is nothing
+    // to proxy to. The server must fall through to the same graceful
+    // degradation api_key mode has always had, not crash at startup.
+    expect(shouldUseOAuthProxy({ mode: 'oauth', baseUrl: undefined })).toBe(false);
+  });
+
+  it('is false for api_key mode regardless of baseUrl', () => {
+    expect(shouldUseOAuthProxy({ mode: 'api_key', baseUrl: 'https://docs.example.com' })).toBe(false);
+  });
+
+  it('is false when mode is undefined (e.g. gateway mode)', () => {
+    expect(shouldUseOAuthProxy({ mode: undefined, baseUrl: 'https://docs.example.com' })).toBe(false);
   });
 });
