@@ -2,6 +2,29 @@
 
 ### Added
 
+- **OAuth auth mode for newer Hudu instances:** newer Hudu deployments (Admin ->
+  External Apps -> MCP) expose their own native MCP server directly, protected by
+  interactive OAuth (RFC 9728/8414 discovery, RFC 7591 Dynamic Client Registration,
+  PKCE `authorization_code`, public client — no client secret) instead of a static
+  API key. `hudu-mcp` now supports this as a second auth mode, selected via the new
+  `HUDU_AUTH_MODE` env var (`api_key` | `oauth`) and **auto-detected** when unset:
+  `api_key` when `HUDU_API_KEY` is present (unchanged default for every existing
+  deployment), `oauth` otherwise. In `oauth` mode the server does not reimplement
+  any tools — it runs the browser authorization flow once (printing the
+  authorization URL to stderr and catching the redirect on a short-lived local
+  callback server), persists tokens to `~/.hudu-mcp/credentials-<hash>.json`
+  (`0600`) with transparent refresh (including a refresh-and-retry-once on an
+  unexpected 401), and then acts as a thin, authenticated proxy that forwards raw
+  MCP JSON-RPC requests to `{HUDU_BASE_URL}/mcp` and relays the Hudu instance's own
+  responses back over stdio or HTTP as-is. New `src/oauth/` module (discovery, DCR,
+  PKCE, token store, callback server, proxying) with unit tests covering PKCE
+  generation, DCR request shaping, token store read/write/refresh-detection, and
+  auth-mode auto-detection — all HTTP calls mocked, no live Hudu instance touched.
+  Gateway mode (`AUTH_MODE=gateway`) is unaffected and cannot be combined with
+  `HUDU_AUTH_MODE=oauth` (it's a stateless multi-tenant header-based proxy with no
+  single user to run a browser flow for; combining the two is a startup error).
+  See the new **Authentication modes** section in the README.
+
 - **Test coverage:** handler-invocation tests for `HuduToolHandler` (all 39
   registered tools) and `HuduResourceHandler`, plus lifecycle tests for
   `HuduService` (missing-credential guard, lazy client construction,

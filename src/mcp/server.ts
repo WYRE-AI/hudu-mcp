@@ -19,6 +19,8 @@ import { EnvironmentConfig, GatewayCredentials, parseCredentialsFromHeaders } fr
 import { HuduResourceHandler } from '../handlers/resource.handler.js';
 import { HuduToolHandler } from '../handlers/tool.handler.js';
 import { verifyS2sHeader, S2S_HEADER } from './s2s-verify.js';
+import { startOAuthStdioProxy } from '../oauth/stdio-proxy.js';
+import { proxyHttpMcpRequest } from '../oauth/http-proxy.js';
 
 export class HuduMcpServer {
   private server: Server;
@@ -161,6 +163,14 @@ export class HuduMcpServer {
   }
 
   private async startStdioTransport(): Promise<void> {
+    if (this.config.hudu.mode === 'oauth') {
+      if (!this.config.hudu.baseUrl) {
+        throw new Error('HUDU_AUTH_MODE=oauth requires HUDU_BASE_URL to be set.');
+      }
+      await startOAuthStdioProxy(this.config.hudu.baseUrl, this.logger);
+      return;
+    }
+
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
     this.logger.info('Hudu MCP Server connected to stdio transport');
@@ -186,6 +196,7 @@ export class HuduMcpServer {
           status: 'ok',
           transport: 'http',
           authMode: isGatewayMode ? 'gateway' : 'env',
+          huduAuthMode: isGatewayMode ? 'api_key' : (this.config.hudu.mode ?? 'api_key'),
           timestamp: new Date().toISOString()
         }));
         return;
@@ -219,6 +230,34 @@ export class HuduMcpServer {
             error: { code: -32000, message: 'Method not allowed' },
             id: null,
           }));
+          return;
+        }
+
+        // OAuth mode: reverse-proxy straight through to the Hudu instance's
+        // own native MCP server rather than dispatching to HuduService/tool
+        // handlers. Mutually exclusive with gateway mode (validated at
+        // config load time in src/utils/config.ts).
+        if (!isGatewayMode && this.config.hudu.mode === 'oauth') {
+          if (!this.config.hudu.baseUrl) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              jsonrpc: '2.0',
+              error: { code: -32000, message: 'HUDU_AUTH_MODE=oauth requires HUDU_BASE_URL to be set' },
+              id: null,
+            }));
+            return;
+          }
+          proxyHttpMcpRequest(req, res, this.config.hudu.baseUrl, this.logger).catch((error) => {
+            this.logger.error('OAuth HTTP proxy failed:', error);
+            if (!res.headersSent) {
+              res.writeHead(502, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                jsonrpc: '2.0',
+                error: { code: -32000, message: 'Failed to proxy request to Hudu MCP server' },
+                id: null,
+              }));
+            }
+          });
           return;
         }
 
@@ -285,6 +324,9 @@ export class HuduMcpServer {
         this.logger.info(`Hudu MCP Server listening on http://${host}:${port}/mcp`);
         this.logger.info(`Health check available at http://${host}:${port}/health`);
         this.logger.info(`Authentication mode: ${isGatewayMode ? 'gateway (header-based)' : 'env (environment variables)'}`);
+        if (!isGatewayMode) {
+          this.logger.info(`Hudu auth mode: ${this.config.hudu.mode ?? 'api_key'}`);
+        }
         resolve();
       });
     });
