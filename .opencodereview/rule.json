@@ -1,6 +1,14 @@
 {
   "rules": [
     {
+      "path": ".github/workflows/**/*.{yml,yaml}",
+      "rule": "Review ONLY the lines actually changed in this diff. Do not speculate about whether a pinned third-party action (referenced by exact commit SHA) might behave differently than documented, expose a differently-named output, or require a step the diff omits -- a SHA pin is immutable, so if the action's behavior at that pin were wrong the workflow would already be failing in practice, not just hypothetically. Do not suggest narrowing top-level `permissions:` unless you can name a specific step in this diff that doesn't need the permission granted. Do not ask the author to 'confirm' or 'verify' or 'double-check' something you have not yourself checked against the referenced action's actual source or a prior successful run -- either find a concrete problem or say nothing."
+    },
+    {
+      "path": ".opencodereview/*.json",
+      "rule": "This file is OpenCodeReview's own project-level rule config. Its schema (top-level `include`, `exclude`, `rules: [{path, rule}]`) is fixed and documented by the OCR project itself -- do not suggest alternate field names (`pattern`, `rule` vs `rules`, etc.) without a concrete citation. Only flag an actual glob syntax error or a rule whose instruction text contradicts itself."
+    },
+    {
       "path": "**/*.{ts,tsx,js,jsx}",
       "rule": "Review ONLY the lines actually changed in this diff. Do not flag pre-existing code the diff didn't touch, even if it sits right next to a changed line. Do not evaluate or restate the correctness of a pre-existing helper/utility function's implementation unless this diff modified that function's own body -- assume it already does what its name and existing callers imply. Do not reference or speculate about files, types, or vendor entries that are not present in this diff, even if they're described in code comments as landing in a follow-up PR. Before flagging a maintainability/consistency issue (e.g. 'add validation for X', 'consider enforcing Y'), check whether a test file in this diff already enforces it -- if so, don't flag it again. Only comment when you can point to a concrete, reachable failure scenario in the changed lines themselves -- not a hypothetical about how a *future*, unwritten caller might misuse this code."
     }
