@@ -1,0 +1,139 @@
+name: OpenCodeReview
+
+# Automated AI PR review via alibaba/open-code-review, backed by our Azure
+# AI Foundry deployment (wyre-foundry-ocr, WYRE AI tenant / rg-foundry, the
+# same resource used by conduit's ocr-review.yml). Runs on every PR
+# open/sync, posts inline comments automatically, no mention required.
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# A rapid second push (synchronize) before the first run finishes would
+# otherwise let a stale run's Approve/Auto-merge steps act on an outdated
+# commit — cancel the superseded run instead.
+concurrency:
+  group: ocr-review-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  ocr-review:
+    name: ocr-review
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Run OpenCodeReview
+        id: ocr
+        uses: alibaba/open-code-review@5cf97d0d15cbd41b602513c4be3bfec3cee5bf7f  # v1.11.2
+        with:
+          llm_url: https://wyre-foundry-ocr.cognitiveservices.azure.com/openai/v1/chat/completions
+          llm_auth_token: ${{ secrets.AZURE_OPENAI_OCR_API_KEY }}
+          llm_model: gpt-5-mini
+          llm_use_anthropic: 'false'
+          llm_auth_header: authorization
+          # gpt-5-mini is a reasoning model — without reasoning_effort pinned
+          # low it spends its whole completion budget on invisible reasoning
+          # and returns empty content (see WYRE-AI/conduit's ocr-review.yml
+          # for the verified-live details of this fix).
+          llm_extra_body: '{"reasoning_effort": "low"}'
+          sticky_summary: 'true'
+          checkpoint_range: 'true'
+
+      # OCR itself only ever posts event:"COMMENT" reviews (hardcoded in its
+      # own posting script) — GitHub also blocks the default GITHUB_TOKEN from
+      # submitting an APPROVE review at all, specifically to stop a workflow
+      # rubber-stamping its own PR. So an actual approval needs a separate
+      # identity: wyre-ai-conduit-ocr-reviewer, a GitHub App installed
+      # org-wide (all current + future WYRE-AI repos), granted
+      # pull_requests:write + metadata:read + contents:write at the app
+      # level. Each step below mints its own token scoped down to only the
+      # permission it actually needs (least privilege per step, not per
+      # app) via the action's per-permission permission-<name> inputs — the
+      # approve token never carries contents:write, so it can't be used to
+      # push/merge even if it leaked. Both tokens are registered with the
+      # runner as secrets by create-github-app-token itself, so they're
+      # automatically log-masked. Only runs when the OCR step above
+      # succeeded — a failed review must never auto-approve or auto-merge.
+      - name: Mint approver token (review-only)
+        id: approver_token
+        if: success() && steps.ocr.outputs.comments_total == '0'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ vars.OCR_APPROVER_APP_ID }}
+          private-key: ${{ secrets.OCR_APPROVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-pull-requests: write
+
+      # Only the clean case needs this: when OCR found something, its own
+      # step above already posted a COMMENT review with the inline findings,
+      # and that intentionally does NOT satisfy the required-approval gate —
+      # a human still has to look at it.
+      #
+      # main's branch protection requires 1 approving review with NO
+      # code-owner constraint (require_code_owner_reviews was intentionally
+      # turned off — CODEOWNERS only lists human/team owners, and a GitHub
+      # App's review would never have satisfied it, so auto-merge could
+      # never fire with it on). This app's own APPROVE review counts as a
+      # normal PR review and satisfies required_approving_review_count
+      # directly — no ruleset bypass_actors mechanism needed here.
+      - name: Approve when clean
+        if: success() && steps.ocr.outputs.comments_total == '0'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.approver_token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
+            -f event=APPROVE \
+            -f body="OpenCodeReview found no issues in this PR (run ${RUN_ID})."
+
+      # Separate, more-privileged token minted only for this step — contents:
+      # write never exists during the Approve step above. Auto-merge, not an
+      # immediate merge attempt: this job can finish before the repo's OTHER
+      # required checks (build, tests, etc.) do, so an immediate merge would
+      # frequently fail with "not all checks have passed yet". GitHub's
+      # auto-merge queues the merge to fire the instant every required check
+      # is green, regardless of this job's finish order relative to the
+      # others. Requires the repo's "Allow auto-merge" setting (enabled
+      # 2026-09-04 for this rollout — it was off, same gotcha hit on conduit).
+      - name: Mint merge token (contents:write)
+        id: merge_token
+        if: success() && steps.ocr.outputs.comments_total == '0'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ vars.OCR_APPROVER_APP_ID }}
+          private-key: ${{ secrets.OCR_APPROVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Auto-merge when clean
+        if: success() && steps.ocr.outputs.comments_total == '0'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.merge_token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Retry: transient API errors (rate limits, brief 5xx) shouldn't
+          # leave a clean PR unmerged. 3 attempts, linear backoff.
+          for attempt in 1 2 3; do
+            if gh pr merge "${PR_NUMBER}" --repo "${REPO}" --auto --squash 2>merge_err.log; then
+              exit 0
+            fi
+            echo "::warning::Auto-merge attempt ${attempt} failed for PR ${PR_NUMBER}: $(cat merge_err.log)"
+            sleep $((attempt * 5))
+          done
+          echo "::error::Failed to queue auto-merge for PR ${PR_NUMBER} after 3 attempts"
+          gh pr view "${PR_NUMBER}" --repo "${REPO}" --json mergeStateStatus,mergeable || true
+          exit 1
