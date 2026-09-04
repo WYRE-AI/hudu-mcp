@@ -15,10 +15,12 @@ import {
 import { HuduService } from '../services/hudu.service.js';
 import { Logger } from '../utils/logger.js';
 import { McpServerConfig } from '../types/mcp.js';
-import { EnvironmentConfig, GatewayCredentials, parseCredentialsFromHeaders } from '../utils/config.js';
+import { EnvironmentConfig, GatewayCredentials, parseCredentialsFromHeaders, shouldUseOAuthProxy } from '../utils/config.js';
 import { HuduResourceHandler } from '../handlers/resource.handler.js';
 import { HuduToolHandler } from '../handlers/tool.handler.js';
 import { verifyS2sHeader, S2S_HEADER } from './s2s-verify.js';
+import { startOAuthStdioProxy, OAuthStdioProxy } from '../oauth/stdio-proxy.js';
+import { proxyHttpMcpRequest } from '../oauth/http-proxy.js';
 
 export class HuduMcpServer {
   private server: Server;
@@ -29,6 +31,7 @@ export class HuduMcpServer {
   private logger: Logger;
   private envConfig: EnvironmentConfig | undefined;
   private httpServer?: HttpServer;
+  private oauthStdioProxy?: OAuthStdioProxy;
 
   constructor(config: McpServerConfig, logger: Logger, envConfig?: EnvironmentConfig) {
     this.logger = logger;
@@ -161,6 +164,18 @@ export class HuduMcpServer {
   }
 
   private async startStdioTransport(): Promise<void> {
+    // Only actually start the OAuth proxy once HUDU_BASE_URL is known — it's
+    // required to discover the Hudu instance's MCP endpoint. A completely
+    // unconfigured server (no HUDU_API_KEY *and* no HUDU_BASE_URL) still
+    // auto-detects oauth mode, but falls through to the same graceful
+    // degradation as api_key mode always had: the server starts, tools/list
+    // still returns the local tool surface, and only an actual tool call
+    // fails with a clear "missing credentials" error.
+    if (shouldUseOAuthProxy(this.config.hudu)) {
+      this.oauthStdioProxy = await startOAuthStdioProxy(this.config.hudu.baseUrl!, this.logger);
+      return;
+    }
+
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
     this.logger.info('Hudu MCP Server connected to stdio transport');
@@ -176,6 +191,25 @@ export class HuduMcpServer {
     const host = this.envConfig?.transport?.host || '0.0.0.0';
     const isGatewayMode = this.envConfig?.auth?.mode === 'gateway';
 
+    // Fail fast rather than start silently exposed: the non-gateway OAuth
+    // HTTP path (below) proxies straight through to the user's real Hudu
+    // instance using the server's own stored token, and only requires the
+    // gateway's S2S header when CONDUIT_S2S_SECRET happens to be set — which
+    // a standalone (non-gateway) deployment never has, since that variable
+    // is Conduit-specific. Bound to a non-loopback host with no S2S secret,
+    // that endpoint would accept unauthenticated requests from anything
+    // that can reach the port. Loopback-only binding is always safe to
+    // start regardless of S2S configuration.
+    const isLoopbackHost = host === '127.0.0.1' || host === '::1' || host === 'localhost';
+    if (!isGatewayMode && shouldUseOAuthProxy(this.config.hudu) && !isLoopbackHost && !process.env.CONDUIT_S2S_SECRET) {
+      throw new Error(
+        `Refusing to start: HTTP transport with OAuth auth mode would listen on ${host}:${port} with no ` +
+          'request authentication, proxying any caller straight through to your Hudu instance. Set ' +
+          "MCP_HTTP_HOST=127.0.0.1 to restrict this to the local machine, or set CONDUIT_S2S_SECRET if you're " +
+          'intentionally running behind an authenticating gateway.',
+      );
+    }
+
     this.httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
       const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
@@ -186,6 +220,7 @@ export class HuduMcpServer {
           status: 'ok',
           transport: 'http',
           authMode: isGatewayMode ? 'gateway' : 'env',
+          huduAuthMode: isGatewayMode ? 'api_key' : (this.config.hudu.mode ?? 'api_key'),
           timestamp: new Date().toISOString()
         }));
         return;
@@ -219,6 +254,28 @@ export class HuduMcpServer {
             error: { code: -32000, message: 'Method not allowed' },
             id: null,
           }));
+          return;
+        }
+
+        // OAuth mode: reverse-proxy straight through to the Hudu instance's
+        // own native MCP server rather than dispatching to HuduService/tool
+        // handlers. Mutually exclusive with gateway mode (validated at
+        // config load time in src/utils/config.ts). Only takes effect once
+        // HUDU_BASE_URL is known — an unconfigured server (auto-detected
+        // oauth mode, but no base URL set either) falls through below to the
+        // same graceful degradation api_key mode has always had.
+        if (!isGatewayMode && shouldUseOAuthProxy(this.config.hudu)) {
+          proxyHttpMcpRequest(req, res, this.config.hudu.baseUrl!, this.logger).catch((error) => {
+            this.logger.error('OAuth HTTP proxy failed:', error);
+            if (!res.headersSent) {
+              res.writeHead(502, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                jsonrpc: '2.0',
+                error: { code: -32000, message: 'Failed to proxy request to Hudu MCP server' },
+                id: null,
+              }));
+            }
+          });
           return;
         }
 
@@ -285,6 +342,9 @@ export class HuduMcpServer {
         this.logger.info(`Hudu MCP Server listening on http://${host}:${port}/mcp`);
         this.logger.info(`Health check available at http://${host}:${port}/health`);
         this.logger.info(`Authentication mode: ${isGatewayMode ? 'gateway (header-based)' : 'env (environment variables)'}`);
+        if (!isGatewayMode) {
+          this.logger.info(`Hudu auth mode: ${this.config.hudu.mode ?? 'api_key'}`);
+        }
         resolve();
       });
     });
@@ -301,6 +361,9 @@ export class HuduMcpServer {
       await new Promise<void>((resolve, reject) => {
         this.httpServer!.close((err) => err ? reject(err) : resolve());
       });
+    }
+    if (this.oauthStdioProxy) {
+      await this.oauthStdioProxy.close();
     }
     await this.server.close();
     this.logger.info('Hudu MCP Server stopped');

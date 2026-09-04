@@ -4,6 +4,8 @@ export interface McpServerConfig {
   hudu: {
     baseUrl?: string;
     apiKey?: string;
+    /** 'api_key' (default when HUDU_API_KEY is set) or 'oauth' (default otherwise). */
+    mode?: 'api_key' | 'oauth';
   };
 }
 

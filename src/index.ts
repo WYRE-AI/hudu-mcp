@@ -2,7 +2,7 @@
 
 import { HuduMcpServer } from './mcp/server.js';
 import { Logger } from './utils/logger.js';
-import { loadEnvironmentConfig, mergeWithMcpConfig } from './utils/config.js';
+import { loadEnvironmentConfig, mergeWithMcpConfig, shouldUseOAuthProxy } from './utils/config.js';
 
 async function main() {
   let logger: Logger | undefined;
@@ -19,7 +19,9 @@ async function main() {
       hasCredentials: !!(mcpConfig.hudu.baseUrl && mcpConfig.hudu.apiKey)
     });
 
-    if (!mcpConfig.hudu.baseUrl || !mcpConfig.hudu.apiKey) {
+    if (shouldUseOAuthProxy(mcpConfig.hudu)) {
+      logger.info('Hudu auth mode: oauth (proxying to the Hudu instance\'s native MCP server)');
+    } else if (!mcpConfig.hudu.baseUrl || !mcpConfig.hudu.apiKey) {
       logger.warn('Missing Hudu credentials. Tools will return errors until HUDU_BASE_URL and HUDU_API_KEY are configured.');
     }
 
