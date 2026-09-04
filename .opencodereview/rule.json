@@ -1,0 +1,8 @@
+{
+  "rules": [
+    {
+      "path": "**/*.{ts,tsx,js,jsx}",
+      "rule": "Review ONLY the lines actually changed in this diff. Do not flag pre-existing code the diff didn't touch, even if it sits right next to a changed line. Do not evaluate or restate the correctness of a pre-existing helper/utility function's implementation unless this diff modified that function's own body -- assume it already does what its name and existing callers imply. Do not reference or speculate about files, types, or vendor entries that are not present in this diff, even if they're described in code comments as landing in a follow-up PR. Before flagging a maintainability/consistency issue (e.g. 'add validation for X', 'consider enforcing Y'), check whether a test file in this diff already enforces it -- if so, don't flag it again. Only comment when you can point to a concrete, reachable failure scenario in the changed lines themselves -- not a hypothetical about how a *future*, unwritten caller might misuse this code."
+    }
+  ]
+}
