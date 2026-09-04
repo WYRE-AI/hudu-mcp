@@ -120,10 +120,17 @@ is set:
      only see the browser prompt again if the refresh token itself expires or
      is revoked.
 
-  Because this flow needs a browser and a local callback port, it applies to the
-  `stdio` and self-hosted `http` transports — not to gateway mode (`AUTH_MODE=gateway`),
-  which is a stateless multi-tenant proxy with credentials injected per request
-  via headers and has no single user to run a browser flow for. Setting
+  Because this flow needs a browser that can reach a callback server bound to
+  `127.0.0.1` on the machine running `hudu-mcp`, it works for `stdio` (always
+  local to the calling MCP client) and for a self-hosted `http` transport
+  **running on the same machine you're browsing from** — e.g. local testing on
+  `localhost:8080`. It does not work for an `http` transport deployed to a
+  remote host you don't have browser-level access to (a cloud VM, a
+  container, etc.): your browser can't reach that machine's own loopback
+  interface to complete the redirect, so the first-run authorization would
+  hang. This is unrelated to gateway mode (`AUTH_MODE=gateway`), which is a
+  stateless multi-tenant proxy with credentials injected per request via
+  headers and has no single user to run a browser flow for at all — setting
   `HUDU_AUTH_MODE=oauth` together with `AUTH_MODE=gateway` is a startup error.
 
 ## Usage

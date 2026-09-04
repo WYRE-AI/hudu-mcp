@@ -16,11 +16,20 @@ import { Logger } from '../utils/logger.js';
 import { huduMcpUrl } from './discovery.js';
 import { createAuthenticatedFetch } from './authenticated-fetch.js';
 
-export async function startOAuthStdioProxy(baseUrl: string, logger: Logger): Promise<void> {
+export interface OAuthStdioProxy {
+  /** Closes both transport legs. Safe to call more than once. */
+  close: () => Promise<void>;
+}
+
+export async function startOAuthStdioProxy(baseUrl: string, logger: Logger): Promise<OAuthStdioProxy> {
   const local = new StdioServerTransport();
   const remote = new StreamableHTTPClientTransport(new URL(huduMcpUrl(baseUrl)), {
     fetch: createAuthenticatedFetch(baseUrl, logger),
   });
+
+  const close = async () => {
+    await Promise.all([local.close().catch(() => {}), remote.close().catch(() => {})]);
+  };
 
   local.onmessage = (message) => {
     remote.send(message).catch((error) => logger.error('Failed to forward message to Hudu MCP server:', error));
@@ -40,6 +49,14 @@ export async function startOAuthStdioProxy(baseUrl: string, logger: Logger): Pro
   };
 
   await remote.start();
-  await local.start();
+  try {
+    await local.start();
+  } catch (error) {
+    // remote is already connected at this point -- don't leak that
+    // connection just because the local leg failed to come up.
+    await remote.close().catch(() => {});
+    throw error;
+  }
   logger.info('Hudu MCP OAuth proxy connected (stdio <-> Hudu native MCP over HTTP)', { baseUrl });
+  return { close };
 }

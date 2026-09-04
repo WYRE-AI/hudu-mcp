@@ -19,7 +19,7 @@ import { EnvironmentConfig, GatewayCredentials, parseCredentialsFromHeaders, sho
 import { HuduResourceHandler } from '../handlers/resource.handler.js';
 import { HuduToolHandler } from '../handlers/tool.handler.js';
 import { verifyS2sHeader, S2S_HEADER } from './s2s-verify.js';
-import { startOAuthStdioProxy } from '../oauth/stdio-proxy.js';
+import { startOAuthStdioProxy, OAuthStdioProxy } from '../oauth/stdio-proxy.js';
 import { proxyHttpMcpRequest } from '../oauth/http-proxy.js';
 
 export class HuduMcpServer {
@@ -31,6 +31,7 @@ export class HuduMcpServer {
   private logger: Logger;
   private envConfig: EnvironmentConfig | undefined;
   private httpServer?: HttpServer;
+  private oauthStdioProxy?: OAuthStdioProxy;
 
   constructor(config: McpServerConfig, logger: Logger, envConfig?: EnvironmentConfig) {
     this.logger = logger;
@@ -171,7 +172,7 @@ export class HuduMcpServer {
     // still returns the local tool surface, and only an actual tool call
     // fails with a clear "missing credentials" error.
     if (shouldUseOAuthProxy(this.config.hudu)) {
-      await startOAuthStdioProxy(this.config.hudu.baseUrl!, this.logger);
+      this.oauthStdioProxy = await startOAuthStdioProxy(this.config.hudu.baseUrl!, this.logger);
       return;
     }
 
@@ -189,6 +190,25 @@ export class HuduMcpServer {
     const port = this.envConfig?.transport?.port || 8080;
     const host = this.envConfig?.transport?.host || '0.0.0.0';
     const isGatewayMode = this.envConfig?.auth?.mode === 'gateway';
+
+    // Fail fast rather than start silently exposed: the non-gateway OAuth
+    // HTTP path (below) proxies straight through to the user's real Hudu
+    // instance using the server's own stored token, and only requires the
+    // gateway's S2S header when CONDUIT_S2S_SECRET happens to be set — which
+    // a standalone (non-gateway) deployment never has, since that variable
+    // is Conduit-specific. Bound to a non-loopback host with no S2S secret,
+    // that endpoint would accept unauthenticated requests from anything
+    // that can reach the port. Loopback-only binding is always safe to
+    // start regardless of S2S configuration.
+    const isLoopbackHost = host === '127.0.0.1' || host === '::1' || host === 'localhost';
+    if (!isGatewayMode && shouldUseOAuthProxy(this.config.hudu) && !isLoopbackHost && !process.env.CONDUIT_S2S_SECRET) {
+      throw new Error(
+        `Refusing to start: HTTP transport with OAuth auth mode would listen on ${host}:${port} with no ` +
+          'request authentication, proxying any caller straight through to your Hudu instance. Set ' +
+          "MCP_HTTP_HOST=127.0.0.1 to restrict this to the local machine, or set CONDUIT_S2S_SECRET if you're " +
+          'intentionally running behind an authenticating gateway.',
+      );
+    }
 
     this.httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
       const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
@@ -341,6 +361,9 @@ export class HuduMcpServer {
       await new Promise<void>((resolve, reject) => {
         this.httpServer!.close((err) => err ? reject(err) : resolve());
       });
+    }
+    if (this.oauthStdioProxy) {
+      await this.oauthStdioProxy.close();
     }
     await this.server.close();
     this.logger.info('Hudu MCP Server stopped');

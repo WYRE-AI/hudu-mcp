@@ -25,9 +25,22 @@ function forwardableRequestHeaders(req: IncomingMessage): Record<string, string>
   return headers;
 }
 
+// MCP tool calls/responses are small JSON payloads in practice; this is
+// generous headroom, not a tuned limit. Enforced regardless of
+// Content-Length (which a client can omit or lie about) so a request
+// can't force unbounded buffering in memory.
+const MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024; // 10 MiB
+
+class RequestBodyTooLargeError extends Error {}
+
 async function readRequestBody(req: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
+  let total = 0;
   for await (const chunk of req) {
+    total += (chunk as Buffer).length;
+    if (total > MAX_REQUEST_BODY_BYTES) {
+      throw new RequestBodyTooLargeError(`Request body exceeds ${MAX_REQUEST_BODY_BYTES} byte limit`);
+    }
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks);
@@ -39,7 +52,24 @@ export async function proxyHttpMcpRequest(
   baseUrl: string,
   logger: Logger,
 ): Promise<void> {
-  const body = await readRequestBody(req);
+  let body: Buffer;
+  try {
+    body = await readRequestBody(req);
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      req.destroy();
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          error: { code: -32000, message: 'Request body too large' },
+          id: null,
+        }),
+      );
+      return;
+    }
+    throw error;
+  }
   const authenticatedFetch = createAuthenticatedFetch(baseUrl, logger);
 
   let upstream: Response;
@@ -76,13 +106,25 @@ export async function proxyHttpMcpRequest(
   }
 
   const reader = upstream.body.getReader();
+  let clientDisconnected = false;
+  const onClientClose = () => {
+    clientDisconnected = true;
+    reader.cancel().catch(() => {});
+  };
+  res.on('close', onClientClose);
   try {
     for (;;) {
       const { done, value } = await reader.read();
-      if (done) break;
-      res.write(Buffer.from(value));
+      if (done || clientDisconnected) break;
+      // res.write() buffers internally and returns false once past its
+      // highWaterMark — without waiting for 'drain' here, a slow client
+      // lets us keep pumping upstream data into that buffer unbounded.
+      if (!res.write(Buffer.from(value))) {
+        await new Promise<void>((resolve) => res.once('drain', resolve));
+      }
     }
   } finally {
+    res.off('close', onClientClose);
     res.end();
   }
 }

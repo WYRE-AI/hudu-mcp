@@ -23,12 +23,35 @@ export interface EnsureAccessTokenOptions {
 
 const DEFAULT_SCOPE = 'read write';
 
-export async function ensureAccessToken(
+// The HTTP transport builds a fresh server + handlers per request, so
+// concurrent requests arriving right as a token expires would otherwise
+// each independently refresh (or worse, each launch its own interactive
+// browser authorization) for the same baseUrl at once. Coalesce them into
+// one in-flight call per normalized baseUrl; every concurrent caller awaits
+// the same promise and gets the same token.
+const inflightByBaseUrl = new Map<string, Promise<string>>();
+
+export function ensureAccessToken(
   baseUrl: string,
   logger: Logger,
   options: EnsureAccessTokenOptions = {},
 ): Promise<string> {
   const normalized = normalizeBaseUrl(baseUrl);
+  const existing = inflightByBaseUrl.get(normalized);
+  if (existing) return existing;
+
+  const flight = ensureAccessTokenUncoalesced(normalized, logger, options).finally(() => {
+    inflightByBaseUrl.delete(normalized);
+  });
+  inflightByBaseUrl.set(normalized, flight);
+  return flight;
+}
+
+async function ensureAccessTokenUncoalesced(
+  normalized: string,
+  logger: Logger,
+  options: EnsureAccessTokenOptions,
+): Promise<string> {
   const stored = loadCredentials(normalized);
 
   if (stored && !options.forceRefresh && !isExpired(stored)) {

@@ -54,6 +54,18 @@ export function startCallbackServer(
         return;
       }
 
+      // State is checked before anything else -- including the error branch
+      // below -- so a request that doesn't correlate to the flow we started
+      // (missing/mismatched state) can never abort it, whether it's forging
+      // a success or a failure. Only a callback that proves it's ours gets
+      // to settle the pending promise either way.
+      const state = url.searchParams.get('state');
+      if (state !== expectedState) {
+        res.writeHead(400, { 'Content-Type': 'text/html' });
+        res.end(htmlPage('Invalid state parameter — authorization aborted for your safety.'));
+        return;
+      }
+
       const error = url.searchParams.get('error');
       if (error) {
         const description = url.searchParams.get('error_description') || error;
@@ -63,14 +75,7 @@ export function startCallbackServer(
         return;
       }
 
-      const state = url.searchParams.get('state');
       const code = url.searchParams.get('code');
-      if (state !== expectedState) {
-        res.writeHead(400, { 'Content-Type': 'text/html' });
-        res.end(htmlPage('Invalid state parameter — authorization aborted for your safety.'));
-        settleError(new Error('OAuth callback state mismatch (possible CSRF or stale redirect)'));
-        return;
-      }
       if (!code) {
         res.writeHead(400, { 'Content-Type': 'text/html' });
         res.end(htmlPage('Missing authorization code.'));

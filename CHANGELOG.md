@@ -45,6 +45,19 @@
 
 ### Fixed
 
+- **OAuth HTTP proxy hardening:** the non-gateway OAuth HTTP transport (new in
+  this release) now refuses to start if it would listen on a non-loopback
+  host with no request authentication configured — previously it would
+  silently proxy any caller through to your Hudu instance using the server's
+  own stored token. Also fixes: an unbounded request-body read (memory
+  exhaustion from a large/slow request), the response stream not honoring
+  backpressure on a slow client, an OAuth callback whose `state` didn't
+  match being able to abort an in-flight authorization instead of being
+  rejected on its own, concurrent requests each independently refreshing (or
+  re-authorizing) the same OAuth token instead of sharing one in-flight
+  attempt, and the stdio OAuth proxy's transports not being closed on server
+  shutdown or when only one side of the proxy started successfully.
+
 - **Deploy buttons:** one-click "Deploy to Cloudflare Workers" and "Deploy to
   DigitalOcean" builds no longer fail with `npm error 401 Unauthorized` from
   `npm.pkg.github.com`. The `.npmrc` now reads a `read:packages` token from
