@@ -2,6 +2,29 @@
 
 ### Added
 
+- **OAuth auth mode for newer Hudu instances:** newer Hudu deployments (Admin ->
+  External Apps -> MCP) expose their own native MCP server directly, protected by
+  interactive OAuth (RFC 9728/8414 discovery, RFC 7591 Dynamic Client Registration,
+  PKCE `authorization_code`, public client — no client secret) instead of a static
+  API key. `hudu-mcp` now supports this as a second auth mode, selected via the new
+  `HUDU_AUTH_MODE` env var (`api_key` | `oauth`) and **auto-detected** when unset:
+  `api_key` when `HUDU_API_KEY` is present (unchanged default for every existing
+  deployment), `oauth` otherwise. In `oauth` mode the server does not reimplement
+  any tools — it runs the browser authorization flow once (printing the
+  authorization URL to stderr and catching the redirect on a short-lived local
+  callback server), persists tokens to `~/.hudu-mcp/credentials-<hash>.json`
+  (`0600`) with transparent refresh (including a refresh-and-retry-once on an
+  unexpected 401), and then acts as a thin, authenticated proxy that forwards raw
+  MCP JSON-RPC requests to `{HUDU_BASE_URL}/mcp` and relays the Hudu instance's own
+  responses back over stdio or HTTP as-is. New `src/oauth/` module (discovery, DCR,
+  PKCE, token store, callback server, proxying) with unit tests covering PKCE
+  generation, DCR request shaping, token store read/write/refresh-detection, and
+  auth-mode auto-detection — all HTTP calls mocked, no live Hudu instance touched.
+  Gateway mode (`AUTH_MODE=gateway`) is unaffected and cannot be combined with
+  `HUDU_AUTH_MODE=oauth` (it's a stateless multi-tenant header-based proxy with no
+  single user to run a browser flow for; combining the two is a startup error).
+  See the new **Authentication modes** section in the README.
+
 - **Test coverage:** handler-invocation tests for `HuduToolHandler` (all 39
   registered tools) and `HuduResourceHandler`, plus lifecycle tests for
   `HuduService` (missing-credential guard, lazy client construction,
@@ -32,6 +55,18 @@
   a community user unable to determine which of a re-generated Hudu API key
   or their `*.huducloud.com` base URL (tried with and without the `https://`
   scheme) was the actual problem.
+- **OAuth HTTP proxy hardening:** the non-gateway OAuth HTTP transport (new in
+  this release) now refuses to start if it would listen on a non-loopback
+  host with no request authentication configured — previously it would
+  silently proxy any caller through to your Hudu instance using the server's
+  own stored token. Also fixes: an unbounded request-body read (memory
+  exhaustion from a large/slow request), the response stream not honoring
+  backpressure on a slow client, an OAuth callback whose `state` didn't
+  match being able to abort an in-flight authorization instead of being
+  rejected on its own, concurrent requests each independently refreshing (or
+  re-authorizing) the same OAuth token instead of sharing one in-flight
+  attempt, and the stdio OAuth proxy's transports not being closed on server
+  shutdown or when only one side of the proxy started successfully.
 - **Deploy buttons:** one-click "Deploy to Cloudflare Workers" and "Deploy to
   DigitalOcean" builds no longer fail with `npm error 401 Unauthorized` from
   `npm.pkg.github.com`. The `.npmrc` now reads a `read:packages` token from
