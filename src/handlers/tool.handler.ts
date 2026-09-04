@@ -29,8 +29,7 @@ export class HuduToolHandler {
     return new Map<string, H>([
       // Connection
       ['hudu_test_connection', async () => {
-        const ok = await s.testConnection();
-        if (!ok) throw new Error('Connection failed: check HUDU_BASE_URL and HUDU_API_KEY');
+        await s.testConnection();
         return { result: { success: true }, message: 'Successfully connected to Hudu API' };
       }],
 
