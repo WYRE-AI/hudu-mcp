@@ -28,7 +28,7 @@ jobs:
     steps:
       - name: Run OpenCodeReview
         id: ocr
-        uses: alibaba/open-code-review@5cf97d0d15cbd41b602513c4be3bfec3cee5bf7f  # v1.11.2
+        uses: alibaba/open-code-review@7f8f254d8407b26edff06f2e3a5940906f1f28ae  # v1.11.9
         with:
           llm_url: https://wyre-foundry-ocr.cognitiveservices.azure.com/openai/v1/chat/completions
           llm_auth_token: ${{ secrets.AZURE_OPENAI_OCR_API_KEY }}
