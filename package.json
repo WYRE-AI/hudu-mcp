@@ -39,11 +39,11 @@
   "devDependencies": {
     "@semantic-release/changelog": "^7.0.0",
     "@semantic-release/git": "^11.0.1",
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.5.1",
     "semantic-release": "^25.0.5",
-    "tsx": "^4.6.0",
+    "tsx": "^4.23.13",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
