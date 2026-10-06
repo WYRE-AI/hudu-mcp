@@ -28,7 +28,18 @@ jobs:
     steps:
       - name: Run OpenCodeReview
         id: ocr
-        uses: alibaba/open-code-review@5cf97d0d15cbd41b602513c4be3bfec3cee5bf7f  # v1.11.2
+        # Pinned v1.11.2 (5cf97d0d) shipped the `auth_token_cmd` deferred
+        # LLM-auth mechanism (alibaba/open-code-review#1051, 2026-08-25) but
+        # never wired OCR_LLM_TOKEN into the "Run OpenCodeReview" step's own
+        # env — that step only had BASE_REF/HEAD_SHA/etc, so the deferred
+        # `printf "%s" "$OCR_LLM_TOKEN"` resolved against an empty var and
+        # every run failed with "auth_token_cmd for llm config produced
+        # empty output" (verified live in this repo's own run logs, e.g.
+        # run 36474474203). Upstream fixed it by v1.12.12 (182898cf) by
+        # adding OCR_LLM_TOKEN: ${{ inputs.llm_auth_token }} to that step's
+        # env — bumping the pin to pick that fix up. The secret itself was
+        # never the problem.
+        uses: alibaba/open-code-review@182898cf522da3d04157b422752d028417974e19  # v1.12.12
         with:
           llm_url: https://wyre-foundry-ocr.cognitiveservices.azure.com/openai/v1/chat/completions
           llm_auth_token: ${{ secrets.AZURE_OPENAI_OCR_API_KEY }}
