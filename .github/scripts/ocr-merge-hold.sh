@@ -6,9 +6,13 @@
 #   (b) a human disabled auto-merge (timeline `auto_merge_disabled` whose actor
 #       is a User, not a bot), and since then no human has re-enabled it
 #       (`auto_merge_enabled` / `auto_squash_enabled` / `auto_rebase_enabled`
-#       by a User) and no `hold` / `do-not-merge` label has been removed.
+#       by a User). Only a human re-enable clears it: removing a hold label
+#       does NOT (labels are handled by (a) from the current label set).
 #       Bot re-arms (the OCR app's own `auto_squash_enabled`) never clear it —
 #       that re-arm on every push is exactly what this guards against.
+#       Events are replayed sorted by created_at (tie-break: event id, then
+#       API position), so the latest human action wins regardless of the
+#       order the timeline API returns them in.
 #
 # The OCR review comments are posted by an earlier step and are unaffected.
 #
@@ -46,9 +50,7 @@ if [[ -n "${LABELS_FILE:-}" || -n "${TIMELINE_FILE:-}" ]]; then
   [[ -n "$labels_json" ]] || labels_json='[]'
   [[ -n "$timeline_json" ]] || timeline_json='[]'
 else
-  for tool in gh; do
-    command -v "$tool" >/dev/null 2>&1 || emit true "$tool is not installed on the runner (fail closed)"
-  done
+  command -v gh >/dev/null 2>&1 || emit true "gh is not installed on the runner (fail closed)"
   : "${REPO:?REPO is required}" "${PR_NUMBER:?PR_NUMBER is required}"
   # --paginate emits one JSON array per page; jq -s 'add' joins them.
   labels_json="$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/labels?per_page=100" | jq -s 'add // []')" \
@@ -72,12 +74,19 @@ decision="$(jq -n -r \
   | if ($held | length) > 0 then
       "true\tlabel \($held | join(", ")) is set"
     else
-      (reduce $timeline[] as $e ({held: false};
+      # Replay in chronological order, not API order: sort by created_at,
+      # then numeric event id, then original position (sort_by is stable).
+      # Events without created_at sort first, so they never override a
+      # dated human action.
+      ($timeline
+        | to_entries
+        | map(.value + {_pos: .key})
+        | sort_by([(.created_at // ""), ((.id // -1) | tonumber? // -1), ._pos])
+      ) as $ordered
+      | (reduce $ordered[] as $e ({held: false};
         if $e.event == "auto_merge_disabled" and ($e | human) then
           {held: true, by: $e.actor.login, at: $e.created_at}
         elif ($e.event | IN("auto_merge_enabled", "auto_squash_enabled", "auto_rebase_enabled")) and ($e | human) then
-          {held: false}
-        elif $e.event == "unlabeled" and ($e.label.name | is_hold_label) then
           {held: false}
         else . end)) as $s
       | if $s.held then
