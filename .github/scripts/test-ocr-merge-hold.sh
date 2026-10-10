@@ -59,5 +59,37 @@ check "actor login with [bot] in caps type"      false '[]' \
   "[$(ev auto_merge_disabled '{"login":"x[bot]","type":"BOT"}')]"
 check "malformed timeline fails closed"          true  '[]' 'not json'
 
+# --- Workflow wrapper: script is run from the BASE checkout (.ocr-base) ---
+# Extract the hold step's run: block from ocr-review.yml and execute it in a
+# scratch dir, with and without the base copy of the script.
+wf="$here/../workflows/ocr-review.yml"
+if [[ -f "$wf" ]]; then
+  awk '/id: hold$/ {f=1} f && /^        run: \|/ {r=1; next} r && /^          / {sub(/^          /, ""); print; next} r {exit}' "$wf" >"$tmp/wrapper.sh"
+  wrap() { # name expected with_base_script
+    local name="$1" want="$2" work="$tmp/work"; rm -rf "$work"; mkdir -p "$work"
+    if [[ "$3" == yes ]]; then
+      mkdir -p "$work/.ocr-base/.github/scripts"
+      cp "$here/ocr-merge-hold.sh" "$work/.ocr-base/.github/scripts/"
+      printf '[]' >"$tmp/labels.json"; printf '[]' >"$tmp/timeline.json"
+    fi
+    local got
+    got="$(cd "$work" && LABELS_FILE="$tmp/labels.json" TIMELINE_FILE="$tmp/timeline.json" \
+      GITHUB_OUTPUT="$tmp/out" PR_NUMBER=1 bash "$tmp/wrapper.sh" >/dev/null; sed -n 's/^hold=//p' "$tmp/out" | head -1)"
+    if [[ "$got" == "$want" ]]; then pass=$((pass + 1)); echo "ok   - $name"
+    else fail=$((fail + 1)); echo "FAIL - $name (want hold=$want, got '$got')"; fi
+    rm -f "$tmp/out"
+  }
+  wrap "wrapper: script missing on base fails closed" true no
+  grep -q 'ocr-merge-hold.sh is not on the base commit yet' "$tmp/wrapper.sh" \
+    && { pass=$((pass + 1)); echo "ok   - wrapper: missing-on-base notice present"; } \
+    || { fail=$((fail + 1)); echo "FAIL - wrapper: missing-on-base notice"; }
+  wrap "wrapper: runs the base copy when present (no hold -> false)" false yes
+  if grep -Eq 'bash \.github/scripts/ocr-merge-hold\.sh' "$wf"; then
+    fail=$((fail + 1)); echo "FAIL - workflow must not run the PR head copy of the script"
+  else
+    pass=$((pass + 1)); echo "ok   - workflow never runs the PR head copy"
+  fi
+fi
+
 echo "# $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

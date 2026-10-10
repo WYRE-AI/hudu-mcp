@@ -66,11 +66,23 @@ jobs:
       # The four steps below require hold == 'false', so if this check is
       # skipped or errors they stay skipped (fail closed). Logic + dry-run
       # tests: .github/scripts/ocr-merge-hold.sh, test-ocr-merge-hold.sh.
-      - name: Checkout merge-hold script
+      # The script is always run from the PR's BASE commit, never the head,
+      # and holds if it is not on base yet.
+      # Remaining limit: on pull_request events this workflow FILE itself is
+      # taken from the PR, so a PR that edits ocr-review.yml can still change
+      # or remove these steps. Base-ref script checkout closes the
+      # script-swap path only; workflow edits need human review (CODEOWNERS /
+      # the hold label) or a pull_request_target split to close fully.
+      - name: Checkout merge-hold script from the base commit
         if: success() && steps.ocr.outputs.comments_total == '0'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          sparse-checkout: .github/scripts
+          # BASE commit, never the PR head: the PR must not be able to edit
+          # the check that decides whether it gets approved and auto-merged.
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ocr-base
+          sparse-checkout: .github/scripts/ocr-merge-hold.sh
+          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: Check merge hold (labels / human-disabled auto-merge)
@@ -82,7 +94,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: bash .github/scripts/ocr-merge-hold.sh
+        run: |
+          set -euo pipefail
+          script=.ocr-base/.github/scripts/ocr-merge-hold.sh
+          if [[ ! -f "$script" ]]; then
+            # Not on base yet (true for the PR that introduces it). Fail
+            # closed; there is deliberately no fallback to the PR's copy.
+            reason="ocr-merge-hold.sh is not on the base commit yet; holding until it lands (merge by hand)"
+            { echo "hold=true"; echo "reason=${reason}"; } >>"$GITHUB_OUTPUT"
+            echo "::notice title=ocr-review merge hold::Skipping approve and auto-merge for PR #${PR_NUMBER}: ${reason}"
+            exit 0
+          fi
+          bash "$script"
 
       # OCR itself only ever posts event:"COMMENT" reviews (hardcoded in its
       # own posting script) — GitHub also blocks the default GITHUB_TOKEN from
