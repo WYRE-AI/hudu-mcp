@@ -12,6 +12,8 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  # Read labels + timeline for the merge-hold check below.
+  issues: read
 
 # A rapid second push (synchronize) before the first run finishes would
 # otherwise let a stale run's Approve/Auto-merge steps act on an outdated
@@ -54,6 +56,33 @@ jobs:
           sticky_summary: 'true'
           checkpoint_range: 'true'
 
+      # Merge hold. A clean OCR review must not approve or arm auto-merge on a
+      # PR a human has held: (a) a `hold` / `do-not-merge` label, or (b) a
+      # human disabled auto-merge (timeline auto_merge_disabled by a User, not
+      # this app) and nobody has re-enabled it or removed a hold label since.
+      # Without this the steps below re-armed auto-merge on every push, even
+      # right after a human turned it off (WYRE-AI/conduit#2081, 2026-10-09). The OCR
+      # comments above are unaffected; only Approve + auto-merge are skipped.
+      # The four steps below require hold == 'false', so if this check is
+      # skipped or errors they stay skipped (fail closed). Logic + dry-run
+      # tests: .github/scripts/ocr-merge-hold.sh, test-ocr-merge-hold.sh.
+      - name: Checkout merge-hold script
+        if: success() && steps.ocr.outputs.comments_total == '0'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Check merge hold (labels / human-disabled auto-merge)
+        id: hold
+        if: success() && steps.ocr.outputs.comments_total == '0'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash .github/scripts/ocr-merge-hold.sh
+
       # OCR itself only ever posts event:"COMMENT" reviews (hardcoded in its
       # own posting script) — GitHub also blocks the default GITHUB_TOKEN from
       # submitting an APPROVE review at all, specifically to stop a workflow
@@ -71,7 +100,7 @@ jobs:
       # succeeded — a failed review must never auto-approve or auto-merge.
       - name: Mint approver token (review-only)
         id: approver_token
-        if: success() && steps.ocr.outputs.comments_total == '0'
+        if: success() && steps.ocr.outputs.comments_total == '0' && steps.hold.outputs.hold == 'false'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           app-id: ${{ vars.OCR_APPROVER_APP_ID }}
@@ -93,7 +122,7 @@ jobs:
       # normal PR review and satisfies required_approving_review_count
       # directly — no ruleset bypass_actors mechanism needed here.
       - name: Approve when clean
-        if: success() && steps.ocr.outputs.comments_total == '0'
+        if: success() && steps.ocr.outputs.comments_total == '0' && steps.hold.outputs.hold == 'false'
         shell: bash
         env:
           GH_TOKEN: ${{ steps.approver_token.outputs.token }}
@@ -117,7 +146,7 @@ jobs:
       # 2026-09-04 for this rollout — it was off, same gotcha hit on conduit).
       - name: Mint merge token (contents:write)
         id: merge_token
-        if: success() && steps.ocr.outputs.comments_total == '0'
+        if: success() && steps.ocr.outputs.comments_total == '0' && steps.hold.outputs.hold == 'false'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           app-id: ${{ vars.OCR_APPROVER_APP_ID }}
@@ -128,7 +157,7 @@ jobs:
           permission-pull-requests: write
 
       - name: Auto-merge when clean
-        if: success() && steps.ocr.outputs.comments_total == '0'
+        if: success() && steps.ocr.outputs.comments_total == '0' && steps.hold.outputs.hold == 'false'
         shell: bash
         env:
           GH_TOKEN: ${{ steps.merge_token.outputs.token }}
