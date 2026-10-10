@@ -43,7 +43,7 @@ check "human disables, human re-enables"         false '[]' \
   "[$(ev auto_merge_disabled "$HUMAN"),$(ev auto_squash_enabled "$HUMAN")]"
 check "human disables, human re-enables (merge)" false '[]' \
   "[$(ev auto_merge_disabled "$HUMAN"),$(ev auto_merge_enabled "$HUMAN")]"
-check "human disables, hold label removed"       false '[]' \
+check "human disables, then hold label removed: still holds" true '[]' \
   "[$(ev auto_merge_disabled "$HUMAN"),$(ev labeled "$HUMAN" hold),$(ev unlabeled "$HUMAN" hold)]"
 check "human disables, unrelated label removed"  true  '[]' \
   "[$(ev auto_merge_disabled "$HUMAN"),$(ev unlabeled "$HUMAN" bug)]"
@@ -71,11 +71,17 @@ check "same timestamp: higher id (enable) wins"    false '[]' \
   "[$(evt auto_squash_enabled "$HUMAN" 2026-10-10T01:00:00Z 11),$(evt auto_merge_disabled "$HUMAN" 2026-10-10T01:00:00Z 10)]"
 check "same timestamp, no ids: API order breaks the tie" true '[]' \
   '[{"event":"auto_squash_enabled","actor":{"login":"asachs01","type":"User"},"created_at":"2026-10-10T01:00:00Z"},{"event":"auto_merge_disabled","actor":{"login":"asachs01","type":"User"},"created_at":"2026-10-10T01:00:00Z"}]'
-check "out of order: hold label removed after disable" false '[]' \
+check "out of order: hold label removed after disable still holds" true '[]' \
   "[$(printf '{"event":"unlabeled","actor":%s,"created_at":"2026-10-10T03:00:00Z","id":30,"label":{"name":"hold"}}' "$HUMAN"),$(evt auto_merge_disabled "$HUMAN" 2026-10-10T01:00:00Z 10)]"
 check "out of order: bot re-arm listed before human disable" true '[]' \
   "[$(evt auto_squash_enabled "$BOT" 2026-10-10T03:00:00Z 30),$(evt auto_merge_disabled "$HUMAN" 2026-10-10T02:00:00Z 20),$(evt auto_squash_enabled "$BOT" 2026-10-10T01:00:00Z 10)]"
 check "label containing hold as a substring"   false '[{"name":"unholdable"},{"name":"on-hold-ish"}]' '[]'
+check "label added then removed, no disable: no hold" false '[]' \
+  "[$(ev labeled "$HUMAN" hold),$(ev unlabeled "$HUMAN" hold)]"
+check "disable, then re-enable by a human: no hold" false '[]' \
+  "[$(evt auto_merge_disabled "$HUMAN" 2026-10-10T01:00:00Z 10),$(evt auto_squash_enabled "$HUMAN" 2026-10-10T02:00:00Z 20)]"
+check "disable, hold removed, then human re-enable: no hold" false '[]' \
+  "[$(evt auto_merge_disabled "$HUMAN" 2026-10-10T01:00:00Z 10),$(printf '{"event":"unlabeled","actor":%s,"created_at":"2026-10-10T02:00:00Z","id":20,"label":{"name":"hold"}}' "$HUMAN"),$(evt auto_merge_enabled "$HUMAN" 2026-10-10T03:00:00Z 30)]"
 check "malformed timeline fails closed"          true  '[]' 'not json'
 
 # --- Workflow wrapper: script is run from the BASE checkout (.ocr-base) ---

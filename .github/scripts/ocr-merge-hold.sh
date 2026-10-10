@@ -6,7 +6,8 @@
 #   (b) a human disabled auto-merge (timeline `auto_merge_disabled` whose actor
 #       is a User, not a bot), and since then no human has re-enabled it
 #       (`auto_merge_enabled` / `auto_squash_enabled` / `auto_rebase_enabled`
-#       by a User) and no `hold` / `do-not-merge` label has been removed.
+#       by a User). Only a human re-enable clears it: removing a hold label
+#       does NOT (labels are handled by (a) from the current label set).
 #       Bot re-arms (the OCR app's own `auto_squash_enabled`) never clear it —
 #       that re-arm on every push is exactly what this guards against.
 #       Events are replayed sorted by created_at (tie-break: event id, then
@@ -86,8 +87,6 @@ decision="$(jq -n -r \
         if $e.event == "auto_merge_disabled" and ($e | human) then
           {held: true, by: $e.actor.login, at: $e.created_at}
         elif ($e.event | IN("auto_merge_enabled", "auto_squash_enabled", "auto_rebase_enabled")) and ($e | human) then
-          {held: false}
-        elif $e.event == "unlabeled" and ($e.label.name | is_hold_label) then
           {held: false}
         else . end)) as $s
       | if $s.held then
