@@ -57,6 +57,25 @@ check "hold label with whitespace and case"     true  '[{"name":"  Hold  "}]' '[
 check "actor present but empty"                  true  '[]' '[{"event":"auto_merge_disabled","actor":{}}]'
 check "actor login with [bot] in caps type"      false '[]' \
   "[$(ev auto_merge_disabled '{"login":"x[bot]","type":"BOT"}')]"
+# Out-of-order timelines: the API order must not decide; created_at (then id) does.
+evt() { # event actor created_at id
+  printf '{"event":"%s","actor":%s,"created_at":"%s","id":%s}' "$1" "$2" "$3" "$4"
+}
+check "out of order: disable then enable (enable listed first)" false '[]' \
+  "[$(evt auto_squash_enabled "$HUMAN" 2026-10-10T02:00:00Z 20),$(evt auto_merge_disabled "$HUMAN" 2026-10-10T01:00:00Z 10)]"
+check "out of order: enable then disable (disable listed first)" true '[]' \
+  "[$(evt auto_merge_disabled "$HUMAN" 2026-10-10T02:00:00Z 20),$(evt auto_squash_enabled "$HUMAN" 2026-10-10T01:00:00Z 10)]"
+check "same timestamp: higher id (disable) wins"   true  '[]' \
+  "[$(evt auto_merge_disabled "$HUMAN" 2026-10-10T01:00:00Z 11),$(evt auto_squash_enabled "$HUMAN" 2026-10-10T01:00:00Z 10)]"
+check "same timestamp: higher id (enable) wins"    false '[]' \
+  "[$(evt auto_squash_enabled "$HUMAN" 2026-10-10T01:00:00Z 11),$(evt auto_merge_disabled "$HUMAN" 2026-10-10T01:00:00Z 10)]"
+check "same timestamp, no ids: API order breaks the tie" true '[]' \
+  '[{"event":"auto_squash_enabled","actor":{"login":"asachs01","type":"User"},"created_at":"2026-10-10T01:00:00Z"},{"event":"auto_merge_disabled","actor":{"login":"asachs01","type":"User"},"created_at":"2026-10-10T01:00:00Z"}]'
+check "out of order: hold label removed after disable" false '[]' \
+  "[$(printf '{"event":"unlabeled","actor":%s,"created_at":"2026-10-10T03:00:00Z","id":30,"label":{"name":"hold"}}' "$HUMAN"),$(evt auto_merge_disabled "$HUMAN" 2026-10-10T01:00:00Z 10)]"
+check "out of order: bot re-arm listed before human disable" true '[]' \
+  "[$(evt auto_squash_enabled "$BOT" 2026-10-10T03:00:00Z 30),$(evt auto_merge_disabled "$HUMAN" 2026-10-10T02:00:00Z 20),$(evt auto_squash_enabled "$BOT" 2026-10-10T01:00:00Z 10)]"
+check "label containing hold as a substring"   false '[{"name":"unholdable"},{"name":"on-hold-ish"}]' '[]'
 check "malformed timeline fails closed"          true  '[]' 'not json'
 
 # --- Workflow wrapper: script is run from the BASE checkout (.ocr-base) ---
@@ -64,13 +83,29 @@ check "malformed timeline fails closed"          true  '[]' 'not json'
 # scratch dir, with and without the base copy of the script.
 wf="$here/../workflows/ocr-review.yml"
 if [[ -f "$wf" ]]; then
-  awk '/id: hold$/ {f=1} f && /^        run: \|/ {r=1; next} r && /^          / {sub(/^          /, ""); print; next} r {exit}' "$wf" >"$tmp/wrapper.sh"
+  # Indentation-agnostic: take the block under the hold step's `run: |`,
+  # stripping the block's own indent, until the indent drops back.
+  awk '
+    /id: hold[[:space:]]*$/ {f=1}
+    f && !r && /^[[:space:]]*run: \|[[:space:]]*$/ {r=1; next}
+    r {
+      if ($0 ~ /^[[:space:]]*$/) { print ""; next }
+      match($0, /^[[:space:]]*/)
+      if (ind == "") ind = RLENGTH
+      if (RLENGTH < ind) exit
+      print substr($0, ind + 1)
+    }' "$wf" >"$tmp/wrapper.sh"
+  if [[ ! -s "$tmp/wrapper.sh" ]] || ! grep -q 'ocr-merge-hold.sh' "$tmp/wrapper.sh"; then
+    fail=$((fail + 1)); echo "FAIL - could not extract the hold step run: block from $wf"
+    : >"$tmp/wrapper.sh"
+  fi
   wrap() { # name expected with_base_script
     local name="$1" want="$2" work="$tmp/work"; rm -rf "$work"; mkdir -p "$work"
+    # Inputs exist in both cases so the run is deterministic.
+    printf '[]' >"$tmp/labels.json"; printf '[]' >"$tmp/timeline.json"
     if [[ "$3" == yes ]]; then
       mkdir -p "$work/.ocr-base/.github/scripts"
       cp "$here/ocr-merge-hold.sh" "$work/.ocr-base/.github/scripts/"
-      printf '[]' >"$tmp/labels.json"; printf '[]' >"$tmp/timeline.json"
     fi
     local got
     got="$(cd "$work" && LABELS_FILE="$tmp/labels.json" TIMELINE_FILE="$tmp/timeline.json" \
