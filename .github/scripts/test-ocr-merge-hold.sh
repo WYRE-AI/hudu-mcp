@@ -53,6 +53,10 @@ check "bot-suffixed User login is not human"     false '[]' \
   "[$(ev auto_merge_disabled '{"login":"some-app[bot]","type":"User"}')]"
 check "hold label wins over human re-enable"     true  '[{"name":"hold"}]' \
   "[$(ev auto_merge_disabled "$HUMAN"),$(ev auto_squash_enabled "$HUMAN")]"
+check "hold label with whitespace and case"     true  '[{"name":"  Hold  "}]' '[]'
+check "actor present but empty"                  true  '[]' '[{"event":"auto_merge_disabled","actor":{}}]'
+check "actor login with [bot] in caps type"      false '[]' \
+  "[$(ev auto_merge_disabled '{"login":"x[bot]","type":"BOT"}')]"
 check "malformed timeline fails closed"          true  '[]' 'not json'
 
 echo "# $pass passed, $fail failed"

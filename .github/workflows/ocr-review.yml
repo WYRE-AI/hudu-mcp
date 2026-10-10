@@ -76,6 +76,7 @@ jobs:
       - name: Check merge hold (labels / human-disabled auto-merge)
         id: hold
         if: success() && steps.ocr.outputs.comments_total == '0'
+        timeout-minutes: 3
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

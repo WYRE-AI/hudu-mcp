@@ -38,12 +38,17 @@ emit() {
   exit 0
 }
 
+command -v jq >/dev/null 2>&1 || emit true "jq is not installed on the runner (fail closed)"
+
 if [[ -n "${LABELS_FILE:-}" || -n "${TIMELINE_FILE:-}" ]]; then
   labels_json="$(cat "${LABELS_FILE:-/dev/null}" 2>/dev/null)" || emit true "could not read labels fixture (fail closed)"
   timeline_json="$(cat "${TIMELINE_FILE:-/dev/null}" 2>/dev/null)" || emit true "could not read timeline fixture (fail closed)"
   [[ -n "$labels_json" ]] || labels_json='[]'
   [[ -n "$timeline_json" ]] || timeline_json='[]'
 else
+  for tool in gh; do
+    command -v "$tool" >/dev/null 2>&1 || emit true "$tool is not installed on the runner (fail closed)"
+  done
   : "${REPO:?REPO is required}" "${PR_NUMBER:?PR_NUMBER is required}"
   # --paginate emits one JSON array per page; jq -s 'add' joins them.
   labels_json="$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/labels?per_page=100" | jq -s 'add // []')" \
@@ -56,11 +61,12 @@ decision="$(jq -n -r \
   --argjson labels "$labels_json" \
   --argjson timeline "$timeline_json" '
   def hold_labels: ["hold", "do-not-merge"];
-  def is_hold_label: (. // "" | ascii_downcase) as $n | hold_labels | index($n) != null;
+  def norm: (. // "") | tostring | gsub("^\\s+|\\s+$"; "") | ascii_downcase;
+  def is_hold_label: norm as $n | hold_labels | index($n) != null;
   def human:
-    .actor != null
-    and ((.actor.type // "User") != "Bot")
-    and ((.actor.login // "") | endswith("[bot]") | not);
+    (.actor | type) == "object"
+    and ((.actor.type // "User") | norm) != "bot"
+    and ((.actor.login // "") | norm | endswith("[bot]") | not);
 
   ($labels | map(.name) | map(select(is_hold_label))) as $held
   | if ($held | length) > 0 then
