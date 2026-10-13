@@ -15,12 +15,104 @@ import {
 import { HuduService } from '../services/hudu.service.js';
 import { Logger } from '../utils/logger.js';
 import { McpServerConfig } from '../types/mcp.js';
-import { EnvironmentConfig, GatewayCredentials, parseCredentialsFromHeaders, shouldUseOAuthProxy } from '../utils/config.js';
+import { EnvironmentConfig, GatewayCredentials, shouldUseOAuthProxy } from '../utils/config.js';
 import { HuduResourceHandler } from '../handlers/resource.handler.js';
 import { HuduToolHandler } from '../handlers/tool.handler.js';
 import { verifyS2sHeader, S2S_HEADER } from './s2s-verify.js';
 import { startOAuthStdioProxy, OAuthStdioProxy } from '../oauth/stdio-proxy.js';
 import { proxyHttpMcpRequest } from '../oauth/http-proxy.js';
+
+/**
+ * Public example values. A copied placeholder must not verify as a real
+ * secret. Matched case-insensitively after trim. Never log the value.
+ */
+const KNOWN_PLACEHOLDER_SECRETS = new Set([
+  'replace-with-a-real-secret',
+  'your-s2s-secret',
+  'your-secret',
+  'changeme',
+  'change-me',
+  'placeholder',
+  'secret',
+  'example',
+  'replace-me',
+  's2s-secret',
+]);
+
+const LOOPBACK_HOST = '127.0.0.1';
+
+const MISSING_S2S_SECRET_ERROR =
+  'Refusing to start HTTP transport: CONDUIT_S2S_SECRET is empty. ' +
+  'Set CONDUIT_S2S_SECRET to the gateway-provisioned secret (openssl rand -hex 32), ' +
+  'or set MCP_ALLOW_INSECURE_DEV=1 for local development only.';
+
+const PLACEHOLDER_S2S_SECRET_ERROR =
+  'Refusing to start HTTP transport: CONDUIT_S2S_SECRET is a known placeholder. ' +
+  'Generate a secret with openssl rand -hex 32 and set CONDUIT_S2S_SECRET to that value.';
+
+const INSECURE_DEV_WARNING =
+  'SECURITY WARNING: CONDUIT_S2S_SECRET is empty and MCP_ALLOW_INSECURE_DEV=1. ' +
+  'HTTP /mcp is not enforcing X-Gateway-S2S and is bound to 127.0.0.1 only. ' +
+  'Do not use this outside local development.';
+
+/** 127.0.0.0/8, localhost, ::1, and IPv4-mapped forms of those. */
+function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase().replace(/^\[(.+)\]$/, '$1');
+  if (normalized === 'localhost' || normalized === '::1') return true;
+  const bare = normalized.startsWith('::ffff:') ? normalized.slice('::ffff:'.length) : normalized;
+  const parts = bare.split('.');
+  if (parts.length !== 4) return false;
+  if (parts.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255)) return false;
+  return parts[0] === '127';
+}
+
+function refuseHttpStart(logger: Logger, message: string): never {
+  logger.error(message);
+  process.exit(1);
+}
+
+/**
+ * Secret for X-Gateway-S2S on /mcp. Read at HTTP startup, not per request.
+ * Empty is fail-closed unless MCP_ALLOW_INSECURE_DEV=1. A known placeholder
+ * always refuses to start, including when that flag is set. The secret
+ * value is never written to logs.
+ */
+function resolveHttpS2sSecret(logger: Logger): { secret: string; insecureDev: boolean } {
+  const raw = (process.env.CONDUIT_S2S_SECRET ?? '').trim();
+  if (raw && KNOWN_PLACEHOLDER_SECRETS.has(raw.toLowerCase())) {
+    refuseHttpStart(logger, PLACEHOLDER_S2S_SECRET_ERROR);
+  }
+  if (raw) return { secret: raw, insecureDev: false };
+  if (process.env.MCP_ALLOW_INSECURE_DEV === '1') {
+    logger.error(INSECURE_DEV_WARNING);
+    return { secret: '', insecureDev: true };
+  }
+  refuseHttpStart(logger, MISSING_S2S_SECRET_ERROR);
+}
+
+/**
+ * With a real secret, honor MCP_HTTP_HOST (default 127.0.0.1 when unset).
+ * Without a secret the insecure-dev bypass forces 127.0.0.1, including when
+ * MCP_HTTP_HOST is a wider address such as 0.0.0.0.
+ */
+function resolveBindHost(hasRealSecret: boolean, logger: Logger): string {
+  const configured = (process.env.MCP_HTTP_HOST ?? '').trim();
+  if (hasRealSecret) return configured || LOOPBACK_HOST;
+  if (configured && !isLoopbackHost(configured)) {
+    logger.error(
+      `WARNING: MCP_HTTP_HOST=${configured} is not a loopback address. ` +
+        'MCP_ALLOW_INSECURE_DEV=1 without CONDUIT_S2S_SECRET forces the listener to 127.0.0.1 only.',
+    );
+  }
+  return LOOPBACK_HOST;
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
 
 export class HuduMcpServer {
   private server: Server;
@@ -185,35 +277,25 @@ export class HuduMcpServer {
    * Start with HTTP Streamable transport.
    * Stateless: each request gets a fresh Server + Transport so multiple
    * clients (via the gateway) never hit "Server already initialized".
+   *
+   * Fails closed (CWE-306): refuses to listen unless CONDUIT_S2S_SECRET is a
+   * real secret. MCP_ALLOW_INSECURE_DEV=1 is the only bypass. It logs a
+   * warning, does not enforce X-Gateway-S2S, and binds 127.0.0.1. A known
+   * placeholder is rejected even with that flag. A real secret honors
+   * MCP_HTTP_HOST. /health stays unauthenticated. stdio does not use S2S.
    */
   private async startHttpTransport(): Promise<void> {
-    const port = this.envConfig?.transport?.port || 8080;
-    const host = this.envConfig?.transport?.host || '0.0.0.0';
+    const configuredPort = this.envConfig?.transport?.port;
+    // Port 0 is a real bind (ephemeral). `||` would turn it into 8080.
+    const port = configuredPort === undefined || Number.isNaN(configuredPort) ? 8080 : configuredPort;
+    const { secret: s2sSecret, insecureDev } = resolveHttpS2sSecret(this.logger);
+    const host = resolveBindHost(!insecureDev, this.logger);
     const isGatewayMode = this.envConfig?.auth?.mode === 'gateway';
-
-    // Fail fast rather than start silently exposed: the non-gateway OAuth
-    // HTTP path (below) proxies straight through to the user's real Hudu
-    // instance using the server's own stored token, and only requires the
-    // gateway's S2S header when CONDUIT_S2S_SECRET happens to be set — which
-    // a standalone (non-gateway) deployment never has, since that variable
-    // is Conduit-specific. Bound to a non-loopback host with no S2S secret,
-    // that endpoint would accept unauthenticated requests from anything
-    // that can reach the port. Loopback-only binding is always safe to
-    // start regardless of S2S configuration.
-    const isLoopbackHost = host === '127.0.0.1' || host === '::1' || host === 'localhost';
-    if (!isGatewayMode && shouldUseOAuthProxy(this.config.hudu) && !isLoopbackHost && !process.env.CONDUIT_S2S_SECRET) {
-      throw new Error(
-        `Refusing to start: HTTP transport with OAuth auth mode would listen on ${host}:${port} with no ` +
-          'request authentication, proxying any caller straight through to your Hudu instance. Set ' +
-          "MCP_HTTP_HOST=127.0.0.1 to restrict this to the local machine, or set CONDUIT_S2S_SECRET if you're " +
-          'intentionally running behind an authenticating gateway.',
-      );
-    }
 
     this.httpServer = createServer((req: IncomingMessage, res: ServerResponse) => {
       const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
-      // Health endpoint — no auth required
+      // Health endpoint — unauthenticated liveness. Must not read credentials.
       if (url.pathname === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -228,22 +310,17 @@ export class HuduMcpServer {
 
       // MCP endpoint — stateless: fresh server + transport per request
       if (url.pathname === '/mcp') {
-        // Gateway S2S verification (gateway#377 parity). Runs before any
-        // credential extraction — see src/mcp/s2s-verify.ts. Empty secret
-        // means S2S enforcement isn't provisioned for this vendor yet, so
-        // we don't call verifyS2sHeader at all (dark-by-default).
-        const s2sSecret = process.env.CONDUIT_S2S_SECRET || '';
-        if (s2sSecret) {
-          const s2sHeader = req.headers[S2S_HEADER] as string | undefined;
-          if (!verifyS2sHeader(s2sHeader, s2sSecret)) {
-            this.logger.warn('Rejected request with missing/invalid gateway S2S header');
-            res.writeHead(401, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-              error: 'Unauthorized',
-              message: 'Missing or invalid gateway S2S authentication header',
-            }));
-            return;
-          }
+        // Empty s2sSecret is only reachable when MCP_ALLOW_INSECURE_DEV=1.
+        // A configured secret is always enforced, before credential extraction.
+        const s2sHeader = headerValue(req.headers[S2S_HEADER]);
+        if (s2sSecret && !verifyS2sHeader(s2sHeader, s2sSecret)) {
+          this.logger.warn('Rejected request with missing/invalid gateway S2S header');
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: 'Unauthorized',
+            message: 'Missing or invalid X-Gateway-S2S header: this endpoint only accepts requests signed by the gateway.',
+          }));
+          return;
         }
 
         // Only POST is supported in stateless mode
@@ -287,6 +364,9 @@ export class HuduMcpServer {
         let perRequestResourceHandler: HuduResourceHandler | undefined;
         if (isGatewayMode) {
           const credentials = this.extractGatewayCredentials(req);
+          // Missing or blank headers are rejected here. Falling through would
+          // use HUDU_BASE_URL / HUDU_API_KEY from the process, which is not
+          // request-scoped.
           if (!credentials.baseUrl || !credentials.apiKey) {
             this.logger.warn('Gateway mode: Missing required credentials in headers', {
               hasBaseUrl: !!credentials.baseUrl,
@@ -339,8 +419,10 @@ export class HuduMcpServer {
 
     await new Promise<void>((resolve) => {
       this.httpServer!.listen(port, host, () => {
-        this.logger.info(`Hudu MCP Server listening on http://${host}:${port}/mcp`);
-        this.logger.info(`Health check available at http://${host}:${port}/health`);
+        const bound = this.httpServer!.address();
+        const shownPort = bound && typeof bound !== 'string' ? bound.port : port;
+        this.logger.info(`Hudu MCP Server listening on http://${host}:${shownPort}/mcp`);
+        this.logger.info(`Health check available at http://${host}:${shownPort}/health`);
         this.logger.info(`Authentication mode: ${isGatewayMode ? 'gateway (header-based)' : 'env (environment variables)'}`);
         if (!isGatewayMode) {
           this.logger.info(`Hudu auth mode: ${this.config.hudu.mode ?? 'api_key'}`);
@@ -351,8 +433,17 @@ export class HuduMcpServer {
   }
 
   private extractGatewayCredentials(req: IncomingMessage): GatewayCredentials {
-    const headers = req.headers as Record<string, string | string[] | undefined>;
-    return parseCredentialsFromHeaders(headers);
+    return {
+      baseUrl: headerValue(req.headers['x-hudu-base-url']),
+      apiKey: headerValue(req.headers['x-hudu-api-key']),
+    };
+  }
+
+  /** TCP address the HTTP transport bound, if it is listening. */
+  boundAddress(): { address: string; port: number } | null {
+    const address = this.httpServer?.address();
+    if (!address || typeof address === 'string') return null;
+    return { address: address.address, port: address.port };
   }
 
   async stop(): Promise<void> {

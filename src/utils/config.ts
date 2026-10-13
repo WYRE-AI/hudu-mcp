@@ -123,7 +123,9 @@ export function loadEnvironmentConfig(): EnvironmentConfig {
     transport: {
       type: transportType,
       port: parseInt(process.env.MCP_HTTP_PORT || '8080', 10),
-      host: process.env.MCP_HTTP_HOST || '0.0.0.0'
+      // Loopback unless MCP_HTTP_HOST is set. HTTP startup still forces
+      // 127.0.0.1 when there is no real CONDUIT_S2S_SECRET.
+      host: process.env.MCP_HTTP_HOST || '127.0.0.1'
     },
     logging: {
       level: (process.env.LOG_LEVEL as LogLevel) || 'info',
