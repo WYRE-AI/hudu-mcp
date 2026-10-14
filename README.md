@@ -75,8 +75,11 @@ reads the token from `NODE_AUTH_TOKEN`, so no further config is needed.
 | `HUDU_API_KEY` | No | - | Your Hudu API key. Setting this selects **api_key** auth mode (see below); omitting it defaults to **oauth** mode. |
 | `HUDU_AUTH_MODE` | No | auto-detected | Explicitly force `api_key` or `oauth`. Overrides the auto-detection below. |
 | `MCP_TRANSPORT` | No | `stdio` | Transport type: `stdio` or `http` |
+| `AUTH_MODE` | No | `env` | `env` reads `HUDU_*` from the environment. `gateway` requires `X-Hudu-Base-URL` and `X-Hudu-API-Key` on each `/mcp` request and does not fall back to those variables. |
+| `CONDUIT_S2S_SECRET` | Yes for HTTP | - | Service-to-service secret. HTTP logs an error and exits non-zero when this is empty or a known placeholder (`changeme`, `secret`, `replace-me`, `your-s2s-secret`, and the other example values). Generate one with `openssl rand -hex 32`. Never commit a real value. The value is never logged. |
+| `MCP_ALLOW_INSECURE_DEV` | No | - | Set to exactly `1` only for local development to start HTTP without `CONDUIT_S2S_SECRET`. The process logs a warning, does not enforce `X-Gateway-S2S`, and binds `127.0.0.1` only. A non-loopback `MCP_HTTP_HOST` is ignored and the override is logged. A known placeholder secret still refuses to start. |
 | `MCP_HTTP_PORT` | No | `8080` | HTTP server port (when using `http` transport) |
-| `MCP_HTTP_HOST` | No | `0.0.0.0` | HTTP server host |
+| `MCP_HTTP_HOST` | No | `127.0.0.1` | Bind address when a real `CONDUIT_S2S_SECRET` is set. The container image sets `0.0.0.0`. Without a real secret the listener is forced to `127.0.0.1`. |
 | `MCP_SERVER_NAME` | No | `hudu-mcp` | Server name reported to MCP clients |
 | `MCP_SERVER_VERSION` | No | `1.0.0` | Server version reported to MCP clients |
 | `LOG_LEVEL` | No | `info` | Log level: `error`, `warn`, `info`, `debug` |
@@ -133,6 +136,11 @@ is set:
   headers and has no single user to run a browser flow for at all — setting
   `HUDU_AUTH_MODE=oauth` together with `AUTH_MODE=gateway` is a startup error.
 
+  HTTP transport (both `api_key` and `oauth`) also requires `CONDUIT_S2S_SECRET`
+  or `MCP_ALLOW_INSECURE_DEV=1`. The dev flag binds `127.0.0.1` only. See
+  [HTTP authentication](#http-authentication). The stdio transport does not
+  use `CONDUIT_S2S_SECRET`.
+
 ## Usage
 
 ### Claude Desktop (stdio)
@@ -175,12 +183,55 @@ first time it's launched:
 
 ### HTTP Transport
 
+`/health` stays unauthenticated and does not read credentials.
+
 ```bash
+CONDUIT_S2S_SECRET="$CONDUIT_S2S_SECRET" \
 HUDU_BASE_URL=https://docs.example.com \
 HUDU_API_KEY=your-api-key \
 MCP_TRANSPORT=http \
 MCP_HTTP_PORT=8080 \
 npm start
+```
+
+Local HTTP without a service-to-service secret is development-only. It binds `127.0.0.1` and logs a warning:
+
+```bash
+MCP_TRANSPORT=http MCP_ALLOW_INSECURE_DEV=1 npm start
+```
+
+#### HTTP authentication
+
+With `MCP_TRANSPORT=http` and a real `CONDUIT_S2S_SECRET`, every `/mcp` request must include `X-Gateway-S2S`. The check is `verifyS2sHeader` in [`src/mcp/s2s-verify.ts`](src/mcp/s2s-verify.ts): the header value is `t=<unix seconds>,v1=<hex>`, where the hex is HMAC-SHA256 of the literal string `t=<unix seconds>` keyed with `CONDUIT_S2S_SECRET` (64 lowercase hex characters). The timestamp must be within 300 seconds of the server clock. A missing or invalid header is HTTP 401, before Hudu credentials are read.
+
+```bash
+TS=$(date +%s)
+SIG=$(printf 't=%s' "$TS" | openssl dgst -sha256 -hmac "$CONDUIT_S2S_SECRET" -hex | awk '{print $NF}')
+curl -sS http://127.0.0.1:8080/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H "X-Gateway-S2S: t=${TS},v1=${SIG}" \
+  -H "X-Hudu-Base-URL: $HUDU_BASE_URL" \
+  -H "X-Hudu-API-Key: $HUDU_API_KEY" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+
+In `AUTH_MODE=gateway`, `/mcp` also requires `X-Hudu-Base-URL` and `X-Hudu-API-Key`. Those headers are the only credential source for that request. A missing header is HTTP 401 and does not fall back to `HUDU_BASE_URL` or `HUDU_API_KEY` in the environment.
+
+Compose refuses to start when `CONDUIT_S2S_SECRET` is unset. The gateway service sets `AUTH_MODE=gateway`, does not inject `HUDU_BASE_URL` or `HUDU_API_KEY`, and publishes `127.0.0.1:8080:8080`:
+
+```bash
+CONDUIT_S2S_SECRET=your-s2s-secret docker compose up
+```
+
+The image listens on `0.0.0.0` inside the container and still refuses to start without a real secret. Publish the port on loopback:
+
+```bash
+docker run \
+  -e CONDUIT_S2S_SECRET=your-s2s-secret \
+  -e AUTH_MODE=gateway \
+  -p 127.0.0.1:8080:8080 \
+  ghcr.io/wyre-ai/hudu-mcp
 ```
 
 ## Tools (39)

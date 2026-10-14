@@ -49,7 +49,7 @@ describe('verifyS2sHeader', () => {
   it('rejects a missing header', () => {
     expect(verifyS2sHeader(undefined, ownSubkey)).toBe(false);
   });
-  it('rejects when the secret is empty (dark-by-default guarantee)', () => {
+  it('rejects when the secret is empty', () => {
     expect(verifyS2sHeader(mintHeader(ownSubkey, NOW), '')).toBe(false);
   });
   it('rejects a tampered signature', () => {
