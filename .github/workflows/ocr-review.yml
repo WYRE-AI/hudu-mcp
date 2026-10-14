@@ -59,7 +59,8 @@ jobs:
       # Merge hold. A clean OCR review must not approve or arm auto-merge on a
       # PR a human has held: (a) a `hold` / `do-not-merge` label, or (b) a
       # human disabled auto-merge (timeline auto_merge_disabled by a User, not
-      # this app) and nobody has re-enabled it or removed a hold label since.
+      # this app) and no human has re-enabled it since (removing a label does not
+      # clear a human disable).
       # Without this the steps below re-armed auto-merge on every push, even
       # right after a human turned it off (WYRE-AI/conduit#2081, 2026-10-09). The OCR
       # comments above are unaffected; only Approve + auto-merge are skipped.
