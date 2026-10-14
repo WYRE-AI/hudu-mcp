@@ -41,7 +41,7 @@ jobs:
         # adding OCR_LLM_TOKEN: ${{ inputs.llm_auth_token }} to that step's
         # env — bumping the pin to pick that fix up. The secret itself was
         # never the problem.
-        uses: alibaba/open-code-review@182898cf522da3d04157b422752d028417974e19  # v1.12.12
+        uses: alibaba/open-code-review@fabbdb296b0d97e2140ada8d54ca7d6d6d1d7ad4  # v1.12.13
         with:
           llm_url: https://wyre-foundry-ocr.cognitiveservices.azure.com/openai/v1/chat/completions
           llm_auth_token: ${{ secrets.AZURE_OPENAI_OCR_API_KEY }}
