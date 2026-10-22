@@ -25,6 +25,13 @@ concurrency:
 jobs:
   ocr-review:
     name: ocr-review
+    # Dependabot-triggered runs only get Dependabot secrets, never Actions
+    # secrets. AZURE_OPENAI_OCR_API_KEY resolves empty there and OCR exits
+    # with "auth_token_cmd for llm config produced empty output" (#63, #70,
+    # #71, e.g. run 38499813473). Skip the job instead of failing red. To
+    # get AI review on Dependabot PRs again, add AZURE_OPENAI_OCR_API_KEY as a
+    # Dependabot secret (org or repo) from Infisical, then drop this guard.
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
