@@ -236,6 +236,8 @@ docker run \
 
 ## Tools (39)
 
+Tool errors for network/DNS failures include the underlying cause (e.g. `ENOTFOUND`) to help troubleshoot connection problems.
+
 ### Companies (8 tools)
 
 | Tool | Description |

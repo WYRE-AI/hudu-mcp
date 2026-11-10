@@ -4,6 +4,25 @@ import { TOOL_DEFINITIONS, McpTool } from './tool.definitions.js';
 
 export { McpTool };
 
+function formatToolError(error: unknown): string {
+  if (!(error instanceof Error)) return 'Unknown error';
+
+  const cause = (error as Error & { cause?: unknown }).cause;
+  if (!cause || typeof cause !== 'object') return error.message;
+
+  const { code, message } = cause as { code?: unknown; message?: unknown };
+  const details: string[] = [];
+  if (typeof message === 'string' && message && !error.message.includes(message)) {
+    details.push(message);
+  }
+  if (typeof code === 'string' && code && !error.message.includes(code) &&
+      !details.some(detail => detail.includes(code))) {
+    details.unshift(code);
+  }
+
+  return details.length ? `${error.message}: ${details.join(': ')}` : error.message;
+}
+
 export interface McpToolResult {
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
@@ -193,7 +212,7 @@ export class HuduToolHandler {
     } catch (error) {
       this.logger.error(`Tool execution failed for ${name}:`, error);
       return {
-        content: [{ type: 'text', text: JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error', tool: name }) }],
+        content: [{ type: 'text', text: JSON.stringify({ error: formatToolError(error), tool: name }) }],
         isError: true
       };
     }
