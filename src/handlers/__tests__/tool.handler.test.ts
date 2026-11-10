@@ -418,6 +418,37 @@ describe('HuduToolHandler - error paths', () => {
     expect(parsed.tool).toBe('hudu_get_company');
   });
 
+  it('includes the underlying DNS cause of a fetch failure', async () => {
+    const cause = Object.assign(new Error('getaddrinfo ENOTFOUND example.huducloud.com'), { code: 'ENOTFOUND' });
+    const error = Object.assign(new TypeError('fetch failed'), { cause });
+    mockClient.companies.list.mockRejectedValue(error);
+    const { result, parsed } = await callAndParse(makeHandler(), 'hudu_list_companies', {});
+    expect(result.isError).toBe(true);
+    expect(parsed.error).toContain('fetch failed');
+    expect(parsed.error).toContain('getaddrinfo ENOTFOUND example.huducloud.com');
+    expect(parsed.error).toBe('fetch failed: getaddrinfo ENOTFOUND example.huducloud.com');
+    expect(parsed.tool).toBe('hudu_list_companies');
+  });
+
+  it.each([
+    [{ code: 'ENOTFOUND' }, 'fetch failed: ENOTFOUND'],
+    [{ message: 'connection refused' }, 'fetch failed: connection refused'],
+    [{ code: 'ECONNREFUSED', message: 'connection refused' }, 'fetch failed: ECONNREFUSED: connection refused'],
+    [{ message: 'fetch failed' }, 'fetch failed'],
+    [{ code: 'fetch', message: 'fetch failed' }, 'fetch failed'],
+    [null, 'fetch failed'],
+  ])('formats cause %j without repeating existing details', async (cause, expected) => {
+    mockClient.companies.list.mockRejectedValue(Object.assign(new TypeError('fetch failed'), { cause }));
+    const { parsed } = await callAndParse(makeHandler(), 'hudu_list_companies', {});
+    expect(parsed.error).toBe(expected);
+  });
+
+  it('preserves the fallback for non-Error rejections', async () => {
+    mockClient.companies.list.mockRejectedValue({ message: 'failure' });
+    const { parsed } = await callAndParse(makeHandler(), 'hudu_list_companies', {});
+    expect(parsed.error).toBe('Unknown error');
+  });
+
   it('surfaces a missing-credentials configuration error through the same envelope', async () => {
     const logger = new Logger('error');
     const service = new HuduService({ name: 'hudu-mcp', version: 'test', hudu: {} }, logger);

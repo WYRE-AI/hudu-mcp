@@ -45,6 +45,8 @@
 
 ### Fixed
 
+- **Tool error reporting:** tool errors now include `error.cause` so DNS/network
+  failures like `ENOTFOUND` are visible instead of a bare `fetch failed`.
 - **`hudu_test_connection` error reporting:** the tool now surfaces the real
   error from the Hudu API (e.g. `Authentication failed - invalid API key`,
   a DNS/network failure, or a malformed URL) instead of collapsing every
