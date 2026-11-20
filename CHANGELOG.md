@@ -45,6 +45,12 @@
 
 ### Fixed
 
+- **The HTTP transport no longer exits on a malformed request (WYREAI-741).** The request
+  target was parsed against the client-supplied `Host` header, and a value that does not parse
+  (or a target such as `//`) threw inside the request listener before authentication. The
+  target is now parsed against a fixed base, so `Host` is no longer consulted, and a target
+  that still cannot be parsed gets a `400` JSON response while the server keeps running.
+
 - **`hudu_test_connection` error reporting:** the tool now surfaces the real
   error from the Hudu API (e.g. `Authentication failed - invalid API key`,
   a DNS/network failure, or a malformed URL) instead of collapsing every
