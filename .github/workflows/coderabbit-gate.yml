@@ -1,0 +1,114 @@
+# CodeRabbit merge gate (Aaron, 2026-11-20; WYREAI-1648).
+#
+# Required check "CodeRabbit approved head" passes only when CodeRabbit's
+# latest decisive review on the PR (APPROVED or CHANGES_REQUESTED) is an
+# APPROVED review of the exact head commit. So no PR merges until CodeRabbit
+# has approved its final commit: not on an OCR-bot approval, not while
+# CodeRabbit is rate limited (its own `CodeRabbit` check run ends "neutral"
+# then, which GitHub counts as passing, and `fail_commit_status` never fails
+# rate-limited reviews), and not after a push that came after the review.
+#
+# Every decision runs main's copy of this file and .github/scripts/
+# coderabbit-gate.sh, never PR-controlled workflow content:
+# - pull_request_target: main's copy, no checkout of PR code, read-only.
+# - workflow_run of coderabbit-gate-review-trigger (fired by reviews):
+#   workflow_run always runs the default-branch copy; it checks out main
+#   only and writes the result as a check run on the PR head.
+#
+# Draft and dependabot PRs fail until CodeRabbit reviews them
+# (`@coderabbitai review`). Do not use `@coderabbitai approve` to get past
+# the gate: that approves without a review.
+name: coderabbit-gate
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_run:
+    workflows: [coderabbit-gate-review-trigger]
+    types: [completed]
+
+concurrency:
+  group: coderabbit-gate-${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: github.event_name == 'pull_request_target'
+    name: CodeRabbit approved head
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout gate script from main (never PR code)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: .github/scripts/coderabbit-gate.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Require a CodeRabbit APPROVED review on the head commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash .github/scripts/coderabbit-gate.sh
+
+  after-review:
+    if: github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: write
+    steps:
+      - name: Checkout gate script from main (never PR code)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: .github/scripts/coderabbit-gate.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Resolve PR for the reviewed head
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          n=$(gh api "repos/${REPO}/commits/${RUN_SHA}/pulls" --jq '[.[] | select(.state == "open")][0].number // empty')
+          if [[ -z "$n" ]]; then echo "No open PR for ${RUN_SHA}; nothing to gate."; exit 0; fi
+          head=$(gh api "repos/${REPO}/pulls/${n}" --jq .head.sha)
+          echo "number=$n" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+      - name: Evaluate gate
+        id: gate
+        if: steps.pr.outputs.number != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
+        run: bash .github/scripts/coderabbit-gate.sh
+      - name: Publish "CodeRabbit approved head" check on the PR head
+        if: steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
+          OUTCOME: ${{ steps.gate.outcome }}
+          SUMMARY: ${{ steps.gate.outputs.summary }}
+        run: |
+          set -euo pipefail
+          conclusion=failure
+          [[ "$OUTCOME" == "success" ]] && conclusion=success
+          jq -n --arg sha "$HEAD_SHA" --arg c "$conclusion" --arg s "${SUMMARY:-see run log}" \
+            '{name: "CodeRabbit approved head", head_sha: $sha, status: "completed", conclusion: $c,
+              output: {title: ("CodeRabbit gate: " + $c), summary: $s}}' \
+            | gh api -X POST "repos/${REPO}/check-runs" --input - >/dev/null
+          echo "Published ${conclusion} on ${HEAD_SHA}"

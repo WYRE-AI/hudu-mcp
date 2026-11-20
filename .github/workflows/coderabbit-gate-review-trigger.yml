@@ -1,0 +1,22 @@
+# Signal-only companion to coderabbit-gate.yml. pull_request_review has no
+# _target variant, so its runs use the PR's own copy of a workflow. This file
+# therefore decides nothing and holds no permissions: it only exists so that
+# coderabbit-gate.yml's workflow_run job (which always runs main's copy)
+# re-evaluates the gate after a review is submitted or dismissed.
+name: coderabbit-gate-review-trigger
+
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions: {}
+
+jobs:
+  signal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - env:
+          ACTION: ${{ github.event.action }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: echo "Review ${ACTION} on PR ${PR_NUMBER}; coderabbit-gate re-evaluates via workflow_run."
