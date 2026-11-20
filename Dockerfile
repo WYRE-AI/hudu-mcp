@@ -46,6 +46,8 @@ COPY --from=builder /app/node_modules ./node_modules
 RUN mkdir -p /app/logs && chown -R hudu:hudu /app
 
 # Switch to non-root user
+# npm is not needed at runtime; removing it clears Trivy CVEs in its bundled deps
+RUN apk upgrade --no-cache && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 USER hudu
 
 # Expose port
