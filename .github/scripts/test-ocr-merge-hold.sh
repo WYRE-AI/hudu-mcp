@@ -59,35 +59,49 @@ check "actor login with [bot] in caps type"      false '[]' \
   "[$(ev auto_merge_disabled '{"login":"x[bot]","type":"BOT"}')]"
 check "malformed timeline fails closed"          true  '[]' 'not json'
 
-# --- Workflow wrapper: script is run from the BASE checkout (.ocr-base) ---
-# Extract the hold step's run: block from ocr-review.yml and execute it in a
-# scratch dir, with and without the base copy of the script.
+# --- Workflow is comment-only (2026-11-20) ---
+# Approve / auto-merge / merge / undraft were removed from ocr-review.yml
+# (Aaron 2026-11-20; merges need CodeRabbit to approve the head commit). The
+# merge-hold script above stays tested so it can return if those steps are
+# ever reintroduced; the workflow itself must not wire them back without an
+# explicit human decision.
+#
+# wf_violations FILE: print every non-comment line (step names, `run:` values
+# and multiline `run: |` bodies alike) that approves, merges, undrafts, or
+# mints the approver app token. Comment lines may still name the disabled
+# path so humans know not to re-add it.
+wf_violations() {
+  grep -nEv '^[[:space:]]*#' "$1" \
+    | grep -E 'event=APPROVE|APPROVE|gh pr merge|gh pr ready|--auto|enable[-_]auto[-_]?merge|enablePullRequestAutoMerge|/merge|create-github-app-token|OCR_APPROVER_APP|approver_token|merge_token|ocr-merge-hold\.sh|id: hold[[:space:]]*$' || true
+}
+# Guard self-test: a step with an innocent name whose multiline run body
+# merges must still be caught.
+cat >"$tmp/bad-wf.yml" <<'YML'
+jobs:
+  x:
+    steps:
+      - name: Review
+        run: |
+          echo reviewing
+          gh pr merge "$PR" --squash
+YML
+if [[ -n "$(wf_violations "$tmp/bad-wf.yml")" ]]; then
+  pass=$((pass + 1)); echo "ok   - guard catches merge commands inside multiline run bodies"
+else
+  fail=$((fail + 1)); echo "FAIL - guard missed a merge command inside a multiline run body"
+fi
 wf="$here/../workflows/ocr-review.yml"
 if [[ -f "$wf" ]]; then
-  awk '/id: hold$/ {f=1} f && /^        run: \|/ {r=1; next} r && /^          / {sub(/^          /, ""); print; next} r {exit}' "$wf" >"$tmp/wrapper.sh"
-  wrap() { # name expected with_base_script
-    local name="$1" want="$2" work="$tmp/work"; rm -rf "$work"; mkdir -p "$work"
-    if [[ "$3" == yes ]]; then
-      mkdir -p "$work/.ocr-base/.github/scripts"
-      cp "$here/ocr-merge-hold.sh" "$work/.ocr-base/.github/scripts/"
-      printf '[]' >"$tmp/labels.json"; printf '[]' >"$tmp/timeline.json"
-    fi
-    local got
-    got="$(cd "$work" && LABELS_FILE="$tmp/labels.json" TIMELINE_FILE="$tmp/timeline.json" \
-      GITHUB_OUTPUT="$tmp/out" PR_NUMBER=1 bash "$tmp/wrapper.sh" >/dev/null; sed -n 's/^hold=//p' "$tmp/out" | head -1)"
-    if [[ "$got" == "$want" ]]; then pass=$((pass + 1)); echo "ok   - $name"
-    else fail=$((fail + 1)); echo "FAIL - $name (want hold=$want, got '$got')"; fi
-    rm -f "$tmp/out"
-  }
-  wrap "wrapper: script missing on base fails closed" true no
-  grep -q 'ocr-merge-hold.sh is not on the base commit yet' "$tmp/wrapper.sh" \
-    && { pass=$((pass + 1)); echo "ok   - wrapper: missing-on-base notice present"; } \
-    || { fail=$((fail + 1)); echo "FAIL - wrapper: missing-on-base notice"; }
-  wrap "wrapper: runs the base copy when present (no hold -> false)" false yes
-  if grep -Eq 'bash \.github/scripts/ocr-merge-hold\.sh' "$wf"; then
-    fail=$((fail + 1)); echo "FAIL - workflow must not run the PR head copy of the script"
+  v="$(wf_violations "$wf")"
+  if [[ -n "$v" ]]; then
+    fail=$((fail + 1)); echo "FAIL - ocr-review.yml must stay comment-only (found approve/merge/undraft):"; echo "$v"
   else
-    pass=$((pass + 1)); echo "ok   - workflow never runs the PR head copy"
+    pass=$((pass + 1)); echo "ok   - ocr-review.yml is comment-only (no approve/merge/undraft)"
+  fi
+  if grep -Eq 'COMMENT-ONLY|Approve and merge disabled pending branch protection' "$wf"; then
+    pass=$((pass + 1)); echo "ok   - ocr-review.yml documents comment-only / pending branch protection"
+  else
+    fail=$((fail + 1)); echo "FAIL - ocr-review.yml missing comment-only notice"
   fi
 fi
 
