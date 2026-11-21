@@ -88,8 +88,8 @@ jobs:
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          prs=$(gh api "repos/${REPO}/commits/${RUN_SHA}/pulls" \
-            --jq "[.[] | select(.state == \"open\" and .head.sha == \"${RUN_SHA}\") | .number] | tojson")
+          prs=$(gh api --paginate --slurp "repos/${REPO}/commits/${RUN_SHA}/pulls?per_page=100" \
+            | jq -c --arg sha "$RUN_SHA" '[.[][] | select(.state == "open" and .head.sha == $sha) | .number]')
           echo "Open PRs with head ${RUN_SHA}: ${prs}"
           echo "prs=${prs}" >> "$GITHUB_OUTPUT"
 
