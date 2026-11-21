@@ -60,16 +60,41 @@ check "actor login with [bot] in caps type"      false '[]' \
 check "malformed timeline fails closed"          true  '[]' 'not json'
 
 # --- Workflow is comment-only (2026-11-20) ---
-# Approve / auto-merge / merge / undraft were removed from ocr-review.yml pending
-# branch protection (CodeRabbit + named owner). The merge-hold script above
-# stays tested so it can return if those steps are ever reintroduced; the
-# workflow itself must not wire them back without an explicit human decision.
+# Approve / auto-merge / merge / undraft were removed from ocr-review.yml
+# (Aaron 2026-11-20; merges need CodeRabbit to approve the head commit). The
+# merge-hold script above stays tested so it can return if those steps are
+# ever reintroduced; the workflow itself must not wire them back without an
+# explicit human decision.
+#
+# wf_violations FILE: print every non-comment line (step names, `run:` values
+# and multiline `run: |` bodies alike) that approves, merges, undrafts, or
+# mints the approver app token. Comment lines may still name the disabled
+# path so humans know not to re-add it.
+wf_violations() {
+  grep -nEv '^[[:space:]]*#' "$1" \
+    | grep -E 'event=APPROVE|APPROVE|gh pr merge|gh pr ready|--auto|enable[-_]auto[-_]?merge|enablePullRequestAutoMerge|/merge|create-github-app-token|OCR_APPROVER_APP|approver_token|merge_token|ocr-merge-hold\.sh|id: hold[[:space:]]*$' || true
+}
+# Guard self-test: a step with an innocent name whose multiline run body
+# merges must still be caught.
+cat >"$tmp/bad-wf.yml" <<'YML'
+jobs:
+  x:
+    steps:
+      - name: Review
+        run: |
+          echo reviewing
+          gh pr merge "$PR" --squash
+YML
+if [[ -n "$(wf_violations "$tmp/bad-wf.yml")" ]]; then
+  pass=$((pass + 1)); echo "ok   - guard catches merge commands inside multiline run bodies"
+else
+  fail=$((fail + 1)); echo "FAIL - guard missed a merge command inside a multiline run body"
+fi
 wf="$here/../workflows/ocr-review.yml"
 if [[ -f "$wf" ]]; then
-  # Match executable steps / run bodies only — comments may still name the
-  # disabled APPROVE / merge path so humans know not to re-add it.
-  if grep -E '^[[:space:]]*(- name:|run:|id:)' "$wf" | grep -Eq 'event=APPROVE|gh pr merge|gh pr ready|Auto-merge when clean|Approve when clean|Mint (approver|merge) token|approver_token|merge_token'; then
-    fail=$((fail + 1)); echo "FAIL - ocr-review.yml must stay comment-only (found approve/merge/undraft)"
+  v="$(wf_violations "$wf")"
+  if [[ -n "$v" ]]; then
+    fail=$((fail + 1)); echo "FAIL - ocr-review.yml must stay comment-only (found approve/merge/undraft):"; echo "$v"
   else
     pass=$((pass + 1)); echo "ok   - ocr-review.yml is comment-only (no approve/merge/undraft)"
   fi
@@ -77,11 +102,6 @@ if [[ -f "$wf" ]]; then
     pass=$((pass + 1)); echo "ok   - ocr-review.yml documents comment-only / pending branch protection"
   else
     fail=$((fail + 1)); echo "FAIL - ocr-review.yml missing comment-only notice"
-  fi
-  if grep -Eq 'id: hold[[:space:]]*$|ocr-merge-hold\.sh' "$wf"; then
-    fail=$((fail + 1)); echo "FAIL - ocr-review.yml must not wire merge-hold while comment-only"
-  else
-    pass=$((pass + 1)); echo "ok   - ocr-review.yml does not wire merge-hold while comment-only"
   fi
 fi
 

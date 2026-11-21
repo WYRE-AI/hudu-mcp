@@ -13,7 +13,19 @@
 # - pull_request_target: main's copy, no checkout of PR code, read-only.
 # - workflow_run of coderabbit-gate-review-trigger (fired by reviews):
 #   workflow_run always runs the default-branch copy; it checks out main
-#   only and writes the result as a check run on the PR head.
+#   only and writes the result as a check run on each open PR whose head is
+#   the reviewed commit.
+#
+# Runs for one PR are serialized (concurrency group per PR number, resolved
+# before the deciding job starts), so the last published result reflects the
+# latest decisive CodeRabbit review.
+#
+# Limit: every workflow in the repo reports as the github-actions app, so a
+# PR that adds its own job named "CodeRabbit approved head" could forge a
+# passing check; that holds for every required Actions check. The
+# unforgeable form is an org ruleset "Require workflows to pass" pointing at
+# this file (needs an org owner). Until then, CodeRabbit's review of
+# .github/workflows/** changes is the backstop.
 #
 # Draft and dependabot PRs fail until CodeRabbit reviews them
 # (`@coderabbitai review`). Do not use `@coderabbitai approve` to get past
@@ -27,9 +39,7 @@ on:
     workflows: [coderabbit-gate-review-trigger]
     types: [completed]
 
-concurrency:
-  group: coderabbit-gate-${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha }}
-  cancel-in-progress: false
+permissions: {}
 
 jobs:
   gate:
@@ -37,6 +47,9 @@ jobs:
     name: CodeRabbit approved head
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    concurrency:
+      group: coderabbit-gate-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     permissions:
       contents: read
       pull-requests: read
@@ -56,10 +69,42 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: bash .github/scripts/coderabbit-gate.sh
 
-  after-review:
+  # After a review: find every open PR whose head IS the reviewed commit
+  # (exact match, so stacked PRs that merely contain it are not picked), then
+  # evaluate each one in its own serialized job.
+  resolve:
     if: github.event_name == 'workflow_run'
     runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      pull-requests: read
+    outputs:
+      prs: ${{ steps.find.outputs.prs }}
+    steps:
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          prs=$(gh api "repos/${REPO}/commits/${RUN_SHA}/pulls" \
+            --jq "[.[] | select(.state == \"open\" and .head.sha == \"${RUN_SHA}\") | .number] | tojson")
+          echo "Open PRs with head ${RUN_SHA}: ${prs}"
+          echo "prs=${prs}" >> "$GITHUB_OUTPUT"
+
+  after-review:
+    needs: resolve
+    if: needs.resolve.outputs.prs != '' && needs.resolve.outputs.prs != '[]'
+    runs-on: ubuntu-latest
     timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        pr: ${{ fromJSON(needs.resolve.outputs.prs) }}
+    concurrency:
+      group: coderabbit-gate-pr-${{ matrix.pr }}
+      cancel-in-progress: false
     permissions:
       contents: read
       pull-requests: read
@@ -72,31 +117,23 @@ jobs:
           sparse-checkout: .github/scripts/coderabbit-gate.sh
           sparse-checkout-cone-mode: false
           persist-credentials: false
-      - name: Resolve PR for the reviewed head
+      - name: Read the PR's current head
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          set -euo pipefail
-          n=$(gh api "repos/${REPO}/commits/${RUN_SHA}/pulls" --jq '[.[] | select(.state == "open")][0].number // empty')
-          if [[ -z "$n" ]]; then echo "No open PR for ${RUN_SHA}; nothing to gate."; exit 0; fi
-          head=$(gh api "repos/${REPO}/pulls/${n}" --jq .head.sha)
-          echo "number=$n" >> "$GITHUB_OUTPUT"
-          echo "head=$head" >> "$GITHUB_OUTPUT"
+          PR_NUMBER: ${{ matrix.pr }}
+        run: echo "head=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .head.sha)" >> "$GITHUB_OUTPUT"
       - name: Evaluate gate
         id: gate
-        if: steps.pr.outputs.number != ''
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          PR_NUMBER: ${{ matrix.pr }}
           HEAD_SHA: ${{ steps.pr.outputs.head }}
         run: bash .github/scripts/coderabbit-gate.sh
       - name: Publish "CodeRabbit approved head" check on the PR head
-        if: steps.pr.outputs.number != ''
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
